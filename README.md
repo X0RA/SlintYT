@@ -15,6 +15,8 @@ It is built around a simple flow:
 
 You'll need libmpv. On Linux and Windows, also install `yt-dlp` (kept up to date) and a JavaScript runtime like Deno on your `PATH`. On macOS, SlintYT downloads and manages its own yt-dlp and Deno in `~/Library/Application Support/SlintYT/tools/`, checks for updates on startup, and provides a manual check in Settings → yt-dlp. The first launch needs an internet connection to install these tools. Then just run `cargo run --locked`.
 
+The macOS installer uses the official `yt-dlp_macos.zip` distribution and unpacks it once during installation. This avoids the single-file build's repeated extraction and slow startup on macOS. Downloads are checksum-verified, and updates switch to the complete new installation only after validating it. Running lookups keep their existing libraries until they finish.
+
 ## Installation
 
 ### Linux (direct install)

@@ -1,4 +1,6 @@
 //! App-private playback tools. This module is compiled only on macOS.
+mod bundle;
+
 use anyhow::{Context, Result, bail};
 use directories::BaseDirs;
 use serde::Deserialize;
@@ -42,7 +44,7 @@ impl Tool {
 
     fn asset(self) -> Result<&'static str> {
         match self {
-            Self::YtDlp => Ok("yt-dlp_macos"),
+            Self::YtDlp => Ok("yt-dlp_macos.zip"),
             Self::Deno => match std::env::consts::ARCH {
                 "aarch64" => Ok("deno-aarch64-apple-darwin.zip"),
                 "x86_64" => Ok("deno-x86_64-apple-darwin.zip"),
@@ -87,19 +89,36 @@ fn root() -> Result<PathBuf> {
         .join("Library/Application Support/SlintYT/tools"))
 }
 
-/// Existing tools remain usable during checks; first use waits for installation.
-pub async fn installed_paths() -> Result<(PathBuf, PathBuf)> {
-    let root = root()?;
-    let yt_dlp = root.join("yt-dlp");
+pub struct InstalledTools {
+    pub yt_dlp: PathBuf,
+    pub deno: PathBuf,
+    _installation: bundle::Installation,
+}
+
+fn paths(root: &Path) -> Result<InstalledTools> {
+    let installation = bundle::open(root)?;
     let deno = root.join("deno");
-    if yt_dlp.is_file() && deno.is_file() {
-        return Ok((yt_dlp, deno));
+    if !deno.is_file() {
+        bail!("Deno is not installed.");
+    }
+    Ok(InstalledTools {
+        yt_dlp: installation.executable.clone(),
+        deno,
+        _installation: installation,
+    })
+}
+
+/// Keep the returned handle alive until the extraction subprocess finishes.
+/// Existing tools remain usable during checks; first use waits for installation.
+pub async fn installed_paths() -> Result<InstalledTools> {
+    let root = root()?;
+    if let Ok(tools) = paths(&root) {
+        return Ok(tools);
     }
     let _guard = UPDATE.lock().await;
-    if !yt_dlp.is_file() || !deno.is_file() {
-        bail!("Playback tools are not ready. Check for updates in Settings → yt-dlp, then retry.");
-    }
-    Ok((yt_dlp, deno))
+    paths(&root).context(
+        "Playback tools are not ready. Check for updates in Settings → yt-dlp, then retry.",
+    )
 }
 
 fn publish(
@@ -172,13 +191,25 @@ async fn check(weak: slint::Weak<AppWindow>) {
 }
 
 async fn version(path: &Path, tool: Tool) -> Option<String> {
+    version_with_timeout(path, tool, Duration::from_secs(15)).await
+}
+
+async fn version_with_timeout(path: &Path, tool: Tool, timeout: Duration) -> Option<String> {
     let mut command = Command::new(path);
     command.arg("--version").stdout(Stdio::piped());
-    let output = run_command(command, Duration::from_secs(15)).await.ok()?;
+    let output = run_command(command, timeout).await.ok()?;
     parse_version(&output, tool)
 }
 
 async fn run_command(mut command: Command, timeout: Duration) -> Result<Vec<u8>> {
+    run_bounded_command(&mut command, timeout, 4096).await
+}
+
+async fn run_bounded_command(
+    command: &mut Command,
+    timeout: Duration,
+    limit: u64,
+) -> Result<Vec<u8>> {
     let mut child = command
         .stdin(Stdio::null())
         .stderr(Stdio::null())
@@ -189,9 +220,9 @@ async fn run_command(mut command: Command, timeout: Duration) -> Result<Vec<u8>>
         let read = async {
             let mut output = Vec::new();
             if let Some(stdout) = stdout {
-                stdout.take(4097).read_to_end(&mut output).await?;
-                if output.len() > 4096 {
-                    bail!("The playback tool returned too much version information.");
+                stdout.take(limit + 1).read_to_end(&mut output).await?;
+                if output.len() as u64 > limit {
+                    bail!("The playback tool command returned too much output.");
                 }
             }
             Ok::<_, anyhow::Error>(output)
@@ -234,13 +265,23 @@ fn parse_version(output: &[u8], tool: Tool) -> Option<String> {
 }
 
 async fn installed_versions(root: &Path) -> String {
-    let yt = version(&root.join("yt-dlp"), Tool::YtDlp)
+    let yt = installed_version(root, Tool::YtDlp)
         .await
         .unwrap_or_else(|| "Not installed".into());
     let deno = version(&root.join("deno"), Tool::Deno)
         .await
         .unwrap_or_else(|| "Not installed".into());
     format!("yt-dlp {yt} · Deno {deno}")
+}
+
+async fn installed_version(root: &Path, tool: Tool) -> Option<String> {
+    match tool {
+        Tool::YtDlp => {
+            let installation = bundle::open(root).ok()?;
+            version(&installation.executable, tool).await
+        }
+        Tool::Deno => version(&root.join("deno"), tool).await,
+    }
 }
 
 async fn fetch(client: &reqwest::Client, url: &str, limit: usize) -> Result<Vec<u8>> {
@@ -314,7 +355,7 @@ async fn update(weak: &slint::Weak<AppWindow>) -> Result<bool> {
     let mut changed = false;
     // Upgrade the runtime first, before a new yt-dlp might require it.
     for tool in [Tool::Deno, Tool::YtDlp] {
-        let installed = version(&root.join(tool.name()), tool).await;
+        let installed = installed_version(&root, tool).await;
         let metadata = fetch(
             &client,
             &format!(
@@ -377,9 +418,12 @@ async fn install(
     // safely and drop them; it cannot install anything after releasing the lock.
     let staging = tokio::task::spawn_blocking(move || {
         verify(&bytes, &expected)?;
-        let staging = tempfile::tempdir_in(staging_root)?;
+        let staging = match tool {
+            Tool::YtDlp => bundle::staging(&staging_root)?,
+            Tool::Deno => tempfile::tempdir_in(staging_root)?,
+        };
         let name = match tool {
-            Tool::YtDlp => tool.name(),
+            Tool::YtDlp => "yt-dlp.zip",
             Tool::Deno => "deno.zip",
         };
         let mut file = File::create(staging.path().join(name))?;
@@ -389,8 +433,37 @@ async fn install(
     })
     .await
     .context("The playback tool installer stopped unexpectedly.")??;
-    let staged = staging.path().join(tool.name());
-    if matches!(tool, Tool::Deno) {
+    let staged = staging.path().join(match tool {
+        Tool::YtDlp => "yt-dlp_macos",
+        Tool::Deno => "deno",
+    });
+    if matches!(tool, Tool::YtDlp) {
+        let archive = staging.path().join("yt-dlp.zip");
+        let mut listing = Command::new("/usr/bin/unzip");
+        listing.args(["-Z1"]).arg(&archive).stdout(Stdio::piped());
+        bundle::validate_entries(
+            &run_bounded_command(&mut listing, Duration::from_secs(15), 256 * 1024).await?,
+        )?;
+        let mut types = Command::new("/usr/bin/unzip");
+        types
+            .args(["-Z", "-l"])
+            .arg(&archive)
+            .stdout(Stdio::piped());
+        bundle::validate_types(
+            &run_bounded_command(&mut types, Duration::from_secs(15), 256 * 1024).await?,
+        )?;
+        let mut unpack = Command::new("/usr/bin/unzip");
+        unpack
+            .arg("-q")
+            .arg(&archive)
+            .arg("-d")
+            .arg(staging.path())
+            .stdout(Stdio::null());
+        run_command(unpack, Duration::from_secs(30))
+            .await
+            .context("Could not unpack yt-dlp.")?;
+        fs::remove_file(archive)?;
+    } else {
         // Extract just the expected entry; never trust archive paths.
         let mut command = Command::new("/usr/bin/unzip");
         command
@@ -403,11 +476,22 @@ async fn install(
             .context("Could not unpack Deno.")?;
     }
     fs::set_permissions(&staged, fs::Permissions::from_mode(0o700))?;
-    if version(&staged, tool).await.as_deref() != Some(latest) {
+    // A newly unpacked build can incur a one-time macOS security scan.
+    if version_with_timeout(&staged, tool, Duration::from_secs(60))
+        .await
+        .as_deref()
+        != Some(latest)
+    {
         bail!("The downloaded playback tool could not be verified on this Mac.");
     }
     // There are no cancellation points between verification and atomic replace.
-    fs::rename(staged, root.join(tool.name())).context("Could not install the playback tool.")?;
+    match tool {
+        Tool::YtDlp => bundle::activate(root, staging)?,
+        Tool::Deno => {
+            fs::rename(staged, root.join(tool.name()))
+                .context("Could not install the playback tool.")?;
+        }
+    }
     Ok(())
 }
 
@@ -442,10 +526,35 @@ mod tests {
         assert!(release.url("denoland/deno", "deno.zip").is_err());
     }
 
+    fn archive_fixture(script: &[u8]) -> Vec<u8> {
+        let staging = tempfile::tempdir().unwrap();
+        fs::write(staging.path().join("yt-dlp_macos"), script).unwrap();
+        fs::create_dir(staging.path().join("_internal")).unwrap();
+        fs::write(staging.path().join("_internal/library"), b"fixture").unwrap();
+        assert!(
+            std::process::Command::new("/usr/bin/zip")
+                .current_dir(staging.path())
+                .args(["-q", "-r", "tool.zip", "yt-dlp_macos", "_internal"])
+                .status()
+                .unwrap()
+                .success()
+        );
+        fs::read(staging.path().join("tool.zip")).unwrap()
+    }
+
+    async fn install_fixture(root: &Path, version: &str) {
+        let archive = archive_fixture(format!("#!/bin/sh\nprintf '{version}\\n'\n").as_bytes());
+        let hash = format!("{:x}", Sha256::digest(&archive));
+        install(root, Tool::YtDlp, archive, &hash, version)
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn failed_install_preserves_working_binary_and_cleans_staging_files() {
         let root = tempfile::tempdir().unwrap();
-        fs::write(root.path().join("yt-dlp"), b"existing").unwrap();
+        install_fixture(root.path(), "2026.01.01").await;
+        let original = bundle::open(root.path()).unwrap().executable;
         assert!(
             install(
                 root.path(),
@@ -457,7 +566,7 @@ mod tests {
             .await
             .is_err()
         );
-        assert_eq!(fs::read(root.path().join("yt-dlp")).unwrap(), b"existing");
+        assert_eq!(bundle::open(root.path()).unwrap().executable, original);
         let hash = format!("{:x}", Sha256::digest(b"invalid-executable"));
         assert!(
             install(
@@ -470,44 +579,45 @@ mod tests {
             .await
             .is_err()
         );
-        assert_eq!(fs::read(root.path().join("yt-dlp")).unwrap(), b"existing");
-        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+        assert_eq!(bundle::open(root.path()).unwrap().executable, original);
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 2);
     }
 
     #[tokio::test]
     async fn install_validates_the_version_before_replacing_the_working_binary() {
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("yt-dlp");
-        fs::write(&path, b"existing").unwrap();
+        install_fixture(root.path(), "2026.01.01").await;
+        let original = bundle::open(root.path()).unwrap().executable;
         let fixture = b"#!/bin/sh\nprintf '2026.08.19\\n'\n";
-        let hash = format!("{:x}", Sha256::digest(fixture));
+        let archive = archive_fixture(fixture);
+        let hash = format!("{:x}", Sha256::digest(&archive));
         assert!(
             install(
                 root.path(),
                 Tool::YtDlp,
-                fixture.to_vec(),
+                archive.clone(),
                 &hash,
                 "2026.01.01"
             )
             .await
             .is_err()
         );
-        assert_eq!(fs::read(&path).unwrap(), b"existing");
-        install(
-            root.path(),
-            Tool::YtDlp,
-            fixture.to_vec(),
-            &hash,
-            "2026.08.19",
-        )
-        .await
-        .unwrap();
+        assert_eq!(bundle::open(root.path()).unwrap().executable, original);
+        install(root.path(), Tool::YtDlp, archive, &hash, "2026.08.19")
+            .await
+            .unwrap();
+        let path = bundle::open(root.path()).unwrap().executable;
         assert_eq!(fs::read(&path).unwrap(), fixture);
+        assert!(!original.exists());
+        assert_eq!(
+            fs::read(path.parent().unwrap().join("_internal/library")).unwrap(),
+            b"fixture"
+        );
         assert_eq!(
             fs::metadata(path).unwrap().permissions().mode() & 0o777,
             0o700
         );
-        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 2);
     }
 
     #[test]

@@ -58,8 +58,14 @@ pub fn valid_id(id: &str) -> bool {
 pub async fn resolve(id: &str, cookies: &str) -> Result<Media> {
     #[cfg(target_os = "macos")]
     {
-        let (executable, _) = crate::macos_tools::installed_paths().await?;
-        return resolve_with(executable.as_os_str(), id, cookies, Duration::from_secs(90)).await;
+        let tools = crate::macos_tools::installed_paths().await?;
+        return resolve_with(
+            tools.yt_dlp.as_os_str(),
+            id,
+            cookies,
+            Duration::from_secs(90),
+        )
+        .await;
     }
     #[cfg(not(target_os = "macos"))]
     resolve_with(OsStr::new("yt-dlp"), id, cookies, Duration::from_secs(90)).await
@@ -162,9 +168,9 @@ async fn run(executable: &OsStr, id: &str, cookies: &str, timeout: Duration) -> 
 
 pub(super) async fn catalogue_output(id: &str, cookies: &str) -> Result<Zeroizing<Vec<u8>>> {
     #[cfg(target_os = "macos")]
-    let (executable, _) = crate::macos_tools::installed_paths().await?;
+    let tools = crate::macos_tools::installed_paths().await?;
     #[cfg(target_os = "macos")]
-    let executable = executable.as_os_str();
+    let executable = tools.yt_dlp.as_os_str();
     #[cfg(not(target_os = "macos"))]
     let executable = OsStr::new("yt-dlp");
     extract(executable, id, cookies, false, Duration::from_secs(90)).await
@@ -186,11 +192,11 @@ async fn extract(
     {
         // Only the app-managed executable needs the managed runtime. Test
         // executables still exercise the exact same stdin/argument handling.
-        if std::path::Path::new(executable).file_name() == Some(OsStr::new("yt-dlp")) {
-            let (_, deno) = crate::macos_tools::installed_paths().await?;
+        if std::path::Path::new(executable).file_name() == Some(OsStr::new("yt-dlp_macos")) {
+            let tools = crate::macos_tools::installed_paths().await?;
             command
                 .arg("--js-runtimes")
-                .arg(format!("deno:{}", deno.display()));
+                .arg(format!("deno:{}", tools.deno.display()));
         }
     }
     let mut child = command

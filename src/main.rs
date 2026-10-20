@@ -7,6 +7,8 @@ mod config;
 mod cookies;
 mod feed;
 mod history;
+#[cfg(target_os = "macos")]
+mod macos_tools;
 mod player;
 mod watch;
 mod youtube;

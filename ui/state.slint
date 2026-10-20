@@ -61,6 +61,14 @@ export global AppState {
     pure callback channel-count([VideoData], string, bool) -> int;
     in-out property <int> scroll-reset: 0;
     in-out property <bool> settings-open: false;
+    callback open-data-folder();
+    // Enabled only by the macOS tool manager (or standalone mock previews).
+    in-out property <bool> managed-tools: false;
+    in-out property <bool> tools-busy: false;
+    in-out property <bool> tools-error: false;
+    in-out property <string> tools-status;
+    in-out property <string> tools-versions;
+    callback check-tool-updates();
     in-out property <bool> account-menu-open: false;
     in-out property <bool> player-sidebar-open: false;
     in-out property <string> toast;

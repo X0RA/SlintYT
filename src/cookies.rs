@@ -190,29 +190,62 @@ fn with_database<T>(
     }
     drop(connection);
 
-    // Firefox forks can hold an exclusive SQLite lock while running (including
-    // Zen on macOS). Read a private copy in that case, keeping the WAL so recent
-    // logins are included. Never copy the browser's lock-bearing shared memory.
-    // TempDir restricts access to its owner and removes all copies on drop.
-    let directory = tempfile::tempdir().map_err(|_| anyhow::anyhow!(DATABASE_ERROR))?;
-    let snapshot = directory.path().join("Cookies");
-    let wal = path.with_file_name(format!(
-        "{}-wal",
-        path.file_name().unwrap_or_default().to_string_lossy()
-    ));
+    read_snapshot(path, read, |from, to| std::fs::copy(from, to))
+}
+
+#[derive(PartialEq, Eq)]
+struct FileStamp {
+    length: u64,
+    modified: std::time::SystemTime,
+    #[cfg(unix)]
+    identity: (u64, u64, i64, i64),
+}
+
+fn file_stamp(path: &Path) -> std::io::Result<Option<FileStamp>> {
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    Ok(Some(FileStamp {
+        length: metadata.len(),
+        modified: metadata.modified()?,
+        #[cfg(unix)]
+        identity: {
+            use std::os::unix::fs::MetadataExt;
+            (
+                metadata.dev(),
+                metadata.ino(),
+                metadata.ctime(),
+                metadata.ctime_nsec(),
+            )
+        },
+    }))
+}
+
+fn read_snapshot<T>(
+    path: &Path,
+    read: impl Fn(&mut Connection) -> rusqlite::Result<T>,
+    copy: impl Fn(&Path, &Path) -> std::io::Result<u64>,
+) -> Result<T> {
+    // Firefox forks can hold an exclusive SQLite lock. Check both source files
+    // before and after copying to detect writes/checkpoints, including a WAL
+    // being replaced or removed. Retry with a fresh directory and SHM state.
+    let mut wal_name = path.as_os_str().to_os_string();
+    wal_name.push("-wal");
+    let wal = std::path::PathBuf::from(wal_name);
     for _ in 0..3 {
         let copied = (|| -> Result<T> {
-            std::fs::copy(path, &snapshot)?;
-            match std::fs::copy(&wal, directory.path().join("Cookies-wal")) {
-                Ok(_) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    match std::fs::remove_file(directory.path().join("Cookies-wal")) {
-                        Ok(()) => {}
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                        Err(error) => return Err(error.into()),
-                    }
-                }
-                Err(error) => return Err(error.into()),
+            let directory = tempfile::tempdir()?;
+            let snapshot = directory.path().join("Cookies");
+            let before = (file_stamp(path)?, file_stamp(&wal)?);
+            copy(path, &snapshot)?;
+            if before.1.is_some() {
+                copy(&wal, &directory.path().join("Cookies-wal"))?;
+            }
+            let after = (file_stamp(path)?, file_stamp(&wal)?);
+            if before != after {
+                bail!(DATABASE_ERROR);
             }
             let mut connection = open(&snapshot)?;
             Ok(read(&mut connection)?)

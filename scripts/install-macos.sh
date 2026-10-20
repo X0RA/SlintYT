@@ -68,7 +68,7 @@ fi
 echo "Installing to ${APP_DEST}..."
 ${SUDO} ditto "${MOUNT_POINT}/${APP_NAME}" "${APP_DEST}"
 
-echo 'YouTube playback requires yt-dlp and Deno (for example, brew install yt-dlp deno).'
+echo 'SlintYT downloads and updates its own yt-dlp and Deno in Application Support on first launch.'
 echo 'The app is ad-hoc signed, not notarized. macOS may require approval in Privacy & Security.'
 
 echo "Installed. Open with: open \"${APP_DEST}\""

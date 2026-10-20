@@ -54,9 +54,14 @@ pub fn valid_id(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
 }
 
-/// Invoke the installed executable. No Python interpreter or imports belong to
-/// SlintYT; yt-dlp may be a standalone binary or a package-manager installation.
+/// macOS uses app-private playback tools; other platforms use PATH.
 pub async fn resolve(id: &str, cookies: &str) -> Result<Media> {
+    #[cfg(target_os = "macos")]
+    {
+        let (executable, _) = crate::macos_tools::installed_paths().await?;
+        return resolve_with(executable.as_os_str(), id, cookies, Duration::from_secs(90)).await;
+    }
+    #[cfg(not(target_os = "macos"))]
     resolve_with(OsStr::new("yt-dlp"), id, cookies, Duration::from_secs(90)).await
 }
 
@@ -156,14 +161,13 @@ async fn run(executable: &OsStr, id: &str, cookies: &str, timeout: Duration) -> 
 }
 
 pub(super) async fn catalogue_output(id: &str, cookies: &str) -> Result<Zeroizing<Vec<u8>>> {
-    extract(
-        OsStr::new("yt-dlp"),
-        id,
-        cookies,
-        false,
-        Duration::from_secs(90),
-    )
-    .await
+    #[cfg(target_os = "macos")]
+    let (executable, _) = crate::macos_tools::installed_paths().await?;
+    #[cfg(target_os = "macos")]
+    let executable = executable.as_os_str();
+    #[cfg(not(target_os = "macos"))]
+    let executable = OsStr::new("yt-dlp");
+    extract(executable, id, cookies, false, Duration::from_secs(90)).await
 }
 
 async fn extract(
@@ -177,7 +181,19 @@ async fn extract(
         bail!("This video has an invalid YouTube ID.");
     }
     let config = session_config(cookies)?;
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    #[cfg(target_os = "macos")]
+    {
+        // Only the app-managed executable needs the managed runtime. Test
+        // executables still exercise the exact same stdin/argument handling.
+        if std::path::Path::new(executable).file_name() == Some(OsStr::new("yt-dlp")) {
+            let (_, deno) = crate::macos_tools::installed_paths().await?;
+            command
+                .arg("--js-runtimes")
+                .arg(format!("deno:{}", deno.display()));
+        }
+    }
+    let mut child = command
         .args([
             "--ignore-config",
             "--no-plugin-dirs",
@@ -210,6 +226,11 @@ async fn extract(
         .kill_on_drop(true)
         .spawn()
         .map_err(|_| {
+            #[cfg(target_os = "macos")]
+            return anyhow::anyhow!(
+                "yt-dlp could not be started. Check for updates in Settings → yt-dlp."
+            );
+            #[cfg(not(target_os = "macos"))]
             anyhow::anyhow!(
                 "yt-dlp could not be started. Install yt-dlp and make sure it is on PATH."
             )
@@ -411,7 +432,11 @@ printf '%s\n' '{"url":"https://cdn.example/video"}'
             .err()
             .unwrap()
             .to_string()
-            .contains("PATH")
+            .contains(if cfg!(target_os = "macos") {
+                "Settings"
+            } else {
+                "PATH"
+            })
         );
     }
 

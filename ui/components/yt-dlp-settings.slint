@@ -1,0 +1,25 @@
+import { Theme } from "../theme.slint";
+import { ActionButton } from "action-button.slint";
+
+export component YtDlpSettings inherits Rectangle {
+    in property <bool> busy;
+    in property <bool> error;
+    in property <string> status;
+    in property <string> versions;
+    callback check-updates();
+    min-height: layout.preferred-height;
+    background: Theme.surface;
+    border-width: 1px; border-color: #1e1e23; border-radius: 14px;
+    layout := VerticalLayout {
+        padding: 18px; spacing: 14px;
+        Text { text: root.versions == "" ? "Playback tools are not installed yet." : root.versions; color: Theme.text; font-size: 14px; wrap: word-wrap; }
+        Text { text: "SlintYT checks yt-dlp and Deno for updates at startup. Updates are installed automatically for this app."; color: Theme.subtle; font-size: 13px; wrap: word-wrap; }
+        status-label := Text { text: root.status; color: root.error ? #ff9b9b : Theme.muted; font-size: 13px; wrap: word-wrap; }
+        update-button := ActionButton {
+            text: root.busy ? "Checking…" : "Check for updates";
+            enabled: !root.busy;
+            outlined: true;
+            clicked => { root.check-updates(); }
+        }
+    }
+}

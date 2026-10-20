@@ -17,6 +17,7 @@ use tokio::sync::{mpsc, watch};
 
 mod actions;
 mod avatars;
+mod folders;
 mod shorts;
 
 enum Command {
@@ -51,10 +52,13 @@ pub fn wire(app: &AppWindow) -> (tokio::runtime::Runtime, Arc<crate::player::Pla
         .build()
         .expect("Could not start the background worker");
     let (sender, receiver) = mpsc::unbounded_channel();
+    #[cfg(target_os = "macos")]
+    crate::macos_tools::wire(app, runtime.handle().clone());
     let player = crate::player::install(app, runtime.handle().clone());
     let generation = Arc::new(AtomicU64::new(0));
     let session_slot = Arc::new(std::sync::RwLock::new(None));
     avatars::wire(app, runtime.handle().clone());
+    folders::wire(app, runtime.handle().clone());
     actions::wire(
         app,
         runtime.handle().clone(),

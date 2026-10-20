@@ -4,6 +4,7 @@ import { ActionButton } from "../components/action-button.slint";
 import { Choice } from "../components/choice.slint";
 import { PillInput } from "../components/pill-input.slint";
 import { AppState } from "../state.slint";
+import { YtDlpSettings } from "../components/yt-dlp-settings.slint";
 component Switch inherits Rectangle {
     in property <string> label;
     in-out property <bool> checked: false;
@@ -64,15 +65,17 @@ component SectionLink inherits Rectangle {
     touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
 }
 export component SettingsPage inherits Rectangle {
+    callback open-data-folder();
+    open-data-folder => { AppState.open-data-folder(); }
     private property <bool> narrow: root.width < 800px;
     // The section list highlights the section scrolled to; clicking one jumps to it.
     private property <length> scrolled: -sections.content-y + 24px;
     // Near the end the page cannot scroll a short section to the top, so keep the clicked one highlighted there.
     private property <int> picked: -1;
     private property <bool> at-end: sections.content-y <= -(sections.content-height - sections.visible-height) + 1px;
-    private property <int> section: root.at-end && root.picked >= 0 ? root.picked : root.scrolled >= about.y ? 7 : root.scrolled >= storage.y ? 6 : root.scrolled >= account.y ? 5 : root.scrolled >= feed.y ? 4 : root.scrolled >= watch.y ? 3 : root.scrolled >= interface.y ? 2 : root.scrolled >= engine.y ? 1 : 0;
+    private property <int> section: root.at-end && root.picked >= 0 ? root.picked : root.scrolled >= about.y ? (AppState.managed-tools ? 8 : 7) : AppState.managed-tools && root.scrolled >= tools.y ? 7 : root.scrolled >= storage.y ? 6 : root.scrolled >= account.y ? 5 : root.scrolled >= feed.y ? 4 : root.scrolled >= watch.y ? 3 : root.scrolled >= interface.y ? 2 : root.scrolled >= engine.y ? 1 : 0;
     function jump(index: int) {
-        let target = index == 0 ? playback.y : index == 1 ? engine.y : index == 2 ? interface.y : index == 3 ? watch.y : index == 4 ? feed.y : index == 5 ? account.y : index == 6 ? storage.y : about.y;
+        let target = index == 0 ? playback.y : index == 1 ? engine.y : index == 2 ? interface.y : index == 3 ? watch.y : index == 4 ? feed.y : index == 5 ? account.y : index == 6 ? storage.y : index == 7 && AppState.managed-tools ? tools.y : about.y;
         root.picked = index;
         sections.content-y = -min(target, max(0px, sections.content-height - sections.visible-height));
     }
@@ -82,7 +85,7 @@ export component SettingsPage inherits Rectangle {
         HorizontalLayout {
         spacing: root.narrow ? 16px : 48px;
         VerticalLayout { width: root.narrow ? 120px : 180px; alignment: start; spacing: 2px;
-            for name[index] in ["Playback", "Video engine", "Interface", "Watch status", "Feed", "Account", "Storage", "About"] : SectionLink {
+            for name[index] in AppState.managed-tools ? ["Playback", "Video engine", "Interface", "Watch status", "Feed", "Account", "Storage", "yt-dlp", "About"] : ["Playback", "Video engine", "Interface", "Watch status", "Feed", "Account", "Storage", "About"] : SectionLink {
                 text: name; active: root.section == index; clicked => { root.jump(index); }
             }
         }
@@ -127,7 +130,16 @@ export component SettingsPage inherits Rectangle {
                 storage := SettingSection { title: "Storage"; help: "Data kept on this computer.";
                     SettingRow { first: true; label: "Thumbnail cache"; help: "Saved images that make pages load faster."; kind: 3; options: ["Clear cache"]; action: "Clear cache"; checked: false; }
                     SettingRow { label: "Watch progress"; help: "Local positions for resuming videos."; kind: 3; options: ["Clear progress"]; action: "Clear progress"; checked: false; }
-                    SettingRow { label: "App data folder"; help: "Config, history cache, and logs."; kind: 3; options: ["Open folder"]; action: "Open folder"; checked: false; }
+                    data-folder-row := SettingRow { label: "App data folder"; help: "Config, history cache, and logs."; kind: 3; options: ["Open folder"]; action: "Open folder"; checked: false; activated => { root.open-data-folder(); } }
+                }
+                tools := VerticalLayout {
+                    spacing: 14px;
+                    if AppState.managed-tools : Text { text: "yt-dlp"; color: Theme.text; font-size: 15px; font-weight: 600; }
+                    if AppState.managed-tools : YtDlpSettings {
+                        busy: AppState.tools-busy; error: AppState.tools-error;
+                        status: AppState.tools-status; versions: AppState.tools-versions;
+                        check-updates => { AppState.check-tool-updates(); }
+                    }
                 }
                 about := SettingSection { title: "About"; help: "Version details for bug reports.";
                     SettingRow { first: true; label: "SlintYT 0.1.0"; help: "Rust · Slint 1.18 · libmpv"; kind: 3; options: ["Copy debug info"]; action: "Copy debug info"; checked: false; activated => { AppState.clipboard-text = "SlintYT 0.1.0 · Rust · Slint 1.18 · libmpv"; AppState.clipboard-serial += 1; AppState.toast = "Debug info copied"; } }

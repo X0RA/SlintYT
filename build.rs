@@ -18,6 +18,7 @@ fn main() {
                     "search-bar",
                     "library-row",
                     "settings",
+                    "yt-dlp-settings",
                     "channel-header",
                     "video-details",
                     "pill-input",

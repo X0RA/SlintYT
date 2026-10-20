@@ -1,0 +1,26 @@
+import { Button, Palette } from "std-widgets.slint";
+import { YtDlpSettings } from "../components/yt-dlp-settings.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData } from "../state.slint";
+export component AppWindow inherits Window {
+    title: "yt-dlp settings preview";
+    preferred-width: 640px; preferred-height: 480px; min-width: 320px;
+    background: #0e0e10;
+    in-out property <bool> checking;
+    in-out property <bool> failed;
+    in-out property <string> versions: "yt-dlp 2026.08.19 · Deno 2.9.7";
+    in-out property <string> status: "Everything is up to date.";
+    init => { Palette.color-scheme = ColorScheme.dark; }
+    VerticalLayout {
+        padding: 24px; spacing: 16px;
+        HorizontalLayout {
+            Button { text: "Ready"; clicked => { root.checking = false; root.failed = false; root.versions = "yt-dlp 2026.08.19 · Deno 2.9.7"; root.status = "Everything is up to date."; } }
+            Button { text: "Installing"; clicked => { root.checking = true; root.failed = false; root.versions = ""; root.status = "Downloading Deno 2.9.7…"; } }
+            Button { text: "Error"; clicked => { root.checking = false; root.failed = true; root.status = "Could not check for playback tool updates. Check your connection and retry. Installed tools are kept; you can try again."; } }
+        }
+        YtDlpSettings {
+            busy: root.checking; error: root.failed; status: root.status; versions: root.versions;
+            check-updates => { root.checking = true; root.failed = false; root.status = "Checking for updates…"; }
+        }
+        Rectangle { vertical-stretch: 1; }
+    }
+}

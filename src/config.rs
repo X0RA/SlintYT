@@ -65,6 +65,10 @@ impl Store {
         Ok(self.load_settings()?.current_profile)
     }
 
+    pub fn directory(&self) -> &std::path::Path {
+        &self.root
+    }
+
     pub fn load_settings(&self) -> Result<Settings> {
         let path = self.root.join("settings.json");
         match fs::read(path) {

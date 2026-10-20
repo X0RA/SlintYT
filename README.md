@@ -13,7 +13,7 @@ It is built around a simple flow:
 - play videos with quality selection, subtitles, comments and watched state
 - switch between saved profiles from the account menu
 
-You'll need `yt-dlp` (kept up to date), libmpv and a JavaScript runtime like Deno on your `PATH`. Then just run `cargo run --locked`.
+You'll need libmpv. On Linux and Windows, also install `yt-dlp` (kept up to date) and a JavaScript runtime like Deno on your `PATH`. On macOS, SlintYT downloads and manages its own yt-dlp and Deno in `~/Library/Application Support/SlintYT/tools/`, checks for updates on startup, and provides a manual check in Settings → yt-dlp. The first launch needs an internet connection to install these tools. Then just run `cargo run --locked`.
 
 ## Installation
 

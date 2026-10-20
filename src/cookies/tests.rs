@@ -176,6 +176,63 @@ fn firefox_import_reads_exclusively_locked_database_and_uncheckpointed_wal() {
 }
 
 #[test]
+fn snapshot_retries_a_checkpoint_between_copying_the_database_and_wal() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("cookies.sqlite");
+    let db = Connection::open(&path).unwrap();
+    db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE moz_cookies(value TEXT); PRAGMA wal_checkpoint(TRUNCATE); INSERT INTO moz_cookies VALUES('synthetic');").unwrap();
+    let copies = std::cell::Cell::new(0);
+    let count: i64 = read_snapshot(
+        &path,
+        |db| db.query_row("SELECT count(*) FROM moz_cookies", [], |row| row.get(0)),
+        |from, to| {
+            let result = std::fs::copy(from, to)?;
+            if from == path {
+                copies.set(copies.get() + 1);
+                if copies.get() == 1 {
+                    db.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+                        .unwrap();
+                }
+            }
+            Ok(result)
+        },
+    )
+    .unwrap();
+    assert_eq!(count, 1);
+    assert_eq!(copies.get(), 2);
+}
+
+#[test]
+fn snapshot_refuses_a_database_that_keeps_changing() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("cookies.sqlite");
+    let db = Connection::open(&path).unwrap();
+    db.execute_batch("CREATE TABLE fixture(value TEXT);")
+        .unwrap();
+    let copies = std::cell::Cell::new(0);
+    let reads = std::cell::Cell::new(0);
+    let result = read_snapshot(
+        &path,
+        |_| {
+            reads.set(reads.get() + 1);
+            Ok(())
+        },
+        |from, to| {
+            let copied = std::fs::copy(from, to)?;
+            if from == path {
+                copies.set(copies.get() + 1);
+                db.execute("INSERT INTO fixture VALUES(zeroblob(8192))", [])
+                    .unwrap();
+            }
+            Ok(copied)
+        },
+    );
+    assert!(result.is_err());
+    assert_eq!(copies.get(), 3);
+    assert_eq!(reads.get(), 0);
+}
+
+#[test]
 fn cookie_export_rejects_delimiter_injection_and_empty_sessions() {
     assert!(netscape(Vec::new(), 1).is_err());
     let cookie = Cookie {

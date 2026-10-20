@@ -25,6 +25,10 @@ enum Command {
     ConnectIndex(usize, i32),
     ConnectSaved(usize),
     Connect(Selection),
+    /// Try the last connection attempt again from the start-up splash.
+    Retry,
+    /// Leave the splash (cancelling any connection) and open the profile picker.
+    ChangeBrowser,
     ProfileDetails {
         selection: Selection,
         account: crate::config::AccountProfile,
@@ -112,6 +116,65 @@ pub fn wire(app: &AppWindow) -> (tokio::runtime::Runtime, Arc<crate::player::Pla
         );
     });
     let (send, weak) = (sender.clone(), app.as_weak());
+    ui.on_retry_startup(move || {
+        if !begin(&weak, "Retrying connection…") {
+            return;
+        }
+        if let Some(app) = weak.upgrade() {
+            app.global::<AppState>().set_startup_failed(false);
+        }
+        let _ = send.send(Command::Retry);
+    });
+    // Connecting runs on the worker, so cancel it directly before queuing the picker.
+    let (cancel_connect, cancel) = tokio::sync::watch::channel(0u64);
+    let (send, weak, epoch) = (sender.clone(), app.as_weak(), generation.clone());
+    ui.on_change_browser(move || {
+        cancel_connect.send_modify(|n| *n += 1);
+        epoch.fetch_add(1, Ordering::Relaxed);
+        if let Some(app) = weak.upgrade() {
+            let state = app.global::<AppState>();
+            state.invoke_player_close();
+            state.set_initializing(false);
+            state.set_startup_failed(false);
+            state.set_account_menu_open(false);
+            state.set_settings_open(false);
+            state.set_setup_open(true);
+            state.set_busy(true);
+            state.set_error("".into());
+            state.set_manual_profile_path("".into());
+        }
+        let _ = send.send(Command::ChangeBrowser);
+    });
+    let (weak, handle) = (app.as_weak(), runtime.handle().clone());
+    ui.on_browse_profile_folder(move || {
+        let Some(app) = weak.upgrade() else { return };
+        let state = app.global::<AppState>();
+        if state.get_busy() || state.get_profile_dialog_open() {
+            return;
+        }
+        state.set_profile_dialog_open(true);
+        // Create on the UI thread for macOS, await off-thread on every platform.
+        let dialog = rfd::AsyncFileDialog::new()
+            .set_title("Choose your browser profile folder")
+            .pick_folder();
+        let weak = weak.clone();
+        handle.spawn(async move {
+            let folder = dialog.await;
+            update(&weak, move |app| {
+                let state = app.global::<AppState>();
+                state.set_profile_dialog_open(false);
+                if state.get_setup_open()
+                    && !state.get_initializing()
+                    && let Some(folder) = folder
+                {
+                    state.set_manual_profile_path(folder.path().display().to_string().into());
+                    state.set_selected_profile(-1);
+                    state.set_error("".into());
+                }
+            });
+        });
+    });
+    let (send, weak) = (sender.clone(), app.as_weak());
     ui.on_scan_profiles(move || {
         if begin(&weak, "Looking for browser profiles…") {
             let _ = send.send(Command::Scan);
@@ -125,10 +188,24 @@ pub fn wire(app: &AppWindow) -> (tokio::runtime::Runtime, Arc<crate::player::Pla
     });
     let (send, weak) = (sender.clone(), app.as_weak());
     ui.on_connect_manual(move |browser, profile, keyring| {
+        let profile = match browser::profile_path(&profile) {
+            Ok(path) => path,
+            Err(error) => {
+                if let Some(app) = weak.upgrade() {
+                    app.global::<AppState>().set_error(error.to_string().into());
+                }
+                return;
+            }
+        };
         if begin(&weak, "Reading cookies and checking your YouTube sign-in…") {
+            // The picker only asks for a folder; guess its browser when none is given.
+            let browser = match browser.as_str() {
+                "" => browser::infer(&profile).to_owned(),
+                browser => browser.to_owned(),
+            };
             let _ = send.send(Command::Connect(Selection {
-                browser: browser.to_string(),
-                profile: profile.to_string().trim().into(),
+                browser,
+                profile,
                 keyring: keyring_value(keyring),
             }));
         }
@@ -192,6 +269,7 @@ pub fn wire(app: &AppWindow) -> (tokio::runtime::Runtime, Arc<crate::player::Pla
         generation,
         player.clone(),
         session_slot,
+        cancel,
     ));
     let _ = sender.send(Command::Start);
     (runtime, player)
@@ -289,33 +367,119 @@ fn update(weak: &slint::Weak<AppWindow>, f: impl FnOnce(AppWindow) + Send + 'sta
     let _ = weak.upgrade_in_event_loop(f);
 }
 
-fn publish_profiles(
+// A cancelled connection can already have UI updates queued on the event loop.
+// Keep its receiver version so those updates cannot reopen the splash or feed.
+fn update_startup(
     weak: &slint::Weak<AppWindow>,
-    discovery: browser::Discovery,
-    error: Option<String>,
+    cancel: &watch::Receiver<u64>,
+    f: impl FnOnce(AppWindow) + Send + 'static,
 ) {
+    let cancel = cancel.clone();
+    update(weak, move |app| {
+        if !cancel.has_changed().unwrap_or(true) {
+            f(app);
+        }
+    });
+}
+
+fn publish_profiles(weak: &slint::Weak<AppWindow>, discovery: browser::Discovery) {
+    let current = Store::new().and_then(|s| s.load()).ok().flatten();
+    let (rows, selected) = picker_rows(&discovery.profiles, current.as_ref());
+    let temporary = rows.iter().filter(|r| r.temporary).count() as i32;
     update(weak, move |app| {
         let state = app.global::<AppState>();
-        state.set_profiles(ModelRc::new(VecModel::from(
-            discovery
-                .profiles
-                .into_iter()
-                .map(|p| BrowserProfile {
-                    label: p.label().into(),
-                    path: p.profile.display().to_string().into(),
-                    ..Default::default()
-                })
-                .collect::<Vec<_>>(),
-        )));
+        state.set_profiles(ModelRc::new(VecModel::from(rows)));
+        state.set_selected_profile(selected);
+        state.set_temporary_profiles(temporary);
         state.set_scan_warning(discovery.warning.into());
-        if let Some(error) = error {
-            state.set_setup_open(true);
-            state.set_error(error.into());
-        }
         state.set_status("".into());
         state.set_busy(false);
         state.set_initializing(false);
     });
+}
+
+/// Display group for a discovered profile: browser name and its data folder.
+/// Temporary automation profiles share one group.
+fn profile_group(profile: &Selection) -> (String, std::path::PathBuf) {
+    if profile.temporary() {
+        return ("Temporary profiles".into(), std::path::PathBuf::new());
+    }
+    let label = profile.label();
+    let name = label.split_once(" · ").map_or(label.as_str(), |(n, _)| n);
+    (name.to_owned(), profile.root())
+}
+
+/// Orders profiles group by group, keeping discovery order inside each group and
+/// moving temporary profiles last. Connecting uses indices into this order.
+fn group_profiles(profiles: &mut [Selection]) {
+    let mut seen: Vec<(String, std::path::PathBuf)> = Vec::new();
+    for profile in profiles.iter() {
+        let group = profile_group(profile);
+        if !seen.contains(&group) {
+            seen.push(group);
+        }
+    }
+    profiles.sort_by_key(|p| {
+        let group = profile_group(p);
+        (p.temporary(), seen.iter().position(|g| *g == group))
+    });
+}
+
+/// Picker rows for already grouped profiles, plus the row in use (or -1).
+fn picker_rows(profiles: &[Selection], current: Option<&Selection>) -> (Vec<BrowserProfile>, i32) {
+    let home = directories::BaseDirs::new().map(|d| d.home_dir().to_path_buf());
+    let tidy = |path: &std::path::Path| match home.as_ref().and_then(|h| path.strip_prefix(h).ok())
+    {
+        Some(rest) => format!("~/{}", rest.display()),
+        None => path.display().to_string(),
+    };
+    let mut previous = None;
+    let rows = profiles
+        .iter()
+        .map(|profile| {
+            let group = profile_group(profile);
+            let first = previous.as_ref() != Some(&group);
+            let temporary = profile.temporary();
+            let file = profile
+                .profile
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy();
+            // Automation tools nest a Default profile inside a uniquely named folder.
+            let name = match profile.profile.parent().and_then(|p| p.file_name()) {
+                Some(parent) if temporary && file == "Default" => {
+                    parent.to_string_lossy().into_owned()
+                }
+                _ => file.into_owned(),
+            };
+            let row = BrowserProfile {
+                label: profile.label().into(),
+                path: profile.profile.display().to_string().into(),
+                name: name.into(),
+                root: if temporary {
+                    "made by automation and test tools".into()
+                } else {
+                    tidy(&group.1).into()
+                },
+                initials: initials(&group.0).into(),
+                tone: tone(&group.0),
+                group: group.0.as_str().into(),
+                first,
+                temporary,
+                ..Default::default()
+            };
+            previous = Some(group);
+            row
+        })
+        .collect();
+    let selected = current
+        .and_then(|c| {
+            profiles
+                .iter()
+                .position(|p| p.browser == c.browser && p.profile == c.profile)
+        })
+        .map_or(-1, |i| i as i32);
+    (rows, selected)
 }
 
 fn publish_watch(weak: &slint::Weak<AppWindow>, session: &Session, videos: &mut [Video]) {
@@ -376,6 +540,7 @@ fn publish_saved_profiles(
             },
             initials: initials(&p.youtube.name).into(),
             avatar: p.youtube.avatar.as_str().into(),
+            ..Default::default()
         })
         .collect::<Vec<_>>();
     update(weak, move |app| {
@@ -399,9 +564,11 @@ async fn worker(
     generation: Arc<AtomicU64>,
     player: Arc<crate::player::Playback>,
     session_slot: actions::SessionSlot,
+    mut cancel: tokio::sync::watch::Receiver<u64>,
 ) {
     let mut profiles = Vec::<Selection>::new();
     let mut saved_profiles = Vec::<Selection>::new();
+    let mut last_attempt: Option<Selection> = None;
     let mut session: Option<Arc<Session>> = None;
     let mut current_view = View::Home;
     let mut feed = FeedPage::default();
@@ -520,6 +687,28 @@ async fn worker(
                 continue;
             }
             Command::Scan => scan = true,
+            Command::Retry => match last_attempt.clone() {
+                Some(selection) => connect = Some(selection),
+                None => scan = true,
+            },
+            Command::ChangeBrowser => {
+                cancel.borrow_and_update();
+                generation.fetch_add(1, Ordering::Relaxed);
+                if let Some(task) = active.take() {
+                    task.abort();
+                }
+                update(&weak, |app| {
+                    let state = app.global::<AppState>();
+                    state.set_initializing(false);
+                    state.set_startup_failed(false);
+                    state.set_error("".into());
+                    state.set_settings_open(false);
+                    state.set_setup_open(true);
+                    state.set_busy(true);
+                    state.set_status("Looking for browser profiles…".into());
+                });
+                scan = true;
+            }
             Command::ConnectSaved(index) => connect = saved_profiles.get(index).cloned(),
             Command::ConnectIndex(index, keyring) => {
                 connect = profiles.get(index).cloned().map(|mut p| {
@@ -582,9 +771,10 @@ async fn worker(
         }
         if scan {
             match tokio::task::spawn_blocking(browser::discover).await {
-                Ok(Ok(found)) => {
+                Ok(Ok(mut found)) => {
+                    group_profiles(&mut found.profiles);
                     profiles = found.profiles.clone();
-                    publish_profiles(&weak, found, None);
+                    publish_profiles(&weak, found);
                 }
                 result => {
                     let message = match result {
@@ -597,8 +787,37 @@ async fn worker(
             continue;
         }
         if let Some(selection) = connect {
-            match tokio::time::timeout(Duration::from_secs(120), Session::connect(&selection)).await
-            {
+            last_attempt = Some(selection.clone());
+            let label = selection.label();
+            update_startup(&weak, &cancel, move |app| {
+                let state = app.global::<AppState>();
+                let initial = label.chars().next().map(|c| c.to_uppercase().to_string());
+                state.set_startup_initial(initial.unwrap_or_default().into());
+                state.set_startup_label(label.into());
+                state.set_startup_step(0);
+                state.set_startup_failed(false);
+                state.set_error("".into());
+                state.set_initializing(true);
+            });
+            let step = weak.clone();
+            let step_cancel = cancel.clone();
+            let attempt = tokio::time::timeout(
+                Duration::from_secs(120),
+                Session::connect(&selection, move || {
+                    update_startup(&step, &step_cancel, |app| {
+                        app.global::<AppState>().set_startup_step(1)
+                    });
+                }),
+            );
+            let mut cancelled = cancel.clone();
+            let result = tokio::select! {
+                biased;
+                _ = cancelled.changed() => None,
+                result = attempt => Some(result),
+            };
+            // Cancelled from the splash: the queued ChangeBrowser command follows.
+            let Some(result) = result else { continue };
+            match result {
                 Ok(Ok(new_session)) => {
                     if let Err(error) = Store::new().and_then(|s| s.save(&selection)) {
                         fail(
@@ -612,7 +831,7 @@ async fn worker(
                     if let Ok(settings) = Store::new().and_then(|s| s.load_settings()) {
                         saved_profiles = publish_saved_profiles(&weak, &settings);
                     }
-                    generation.fetch_add(1, Ordering::Relaxed);
+                    let epoch = generation.fetch_add(1, Ordering::Relaxed) + 1;
                     watch_changes = new_session.watch_updates();
                     let note = new_session.watch_note();
                     player.set_session(&new_session);
@@ -634,7 +853,7 @@ async fn worker(
                     pages.clear();
                     images.clear();
                     let label = selection.label();
-                    update(&weak, move |app| {
+                    update_startup(&weak, &cancel, move |app| {
                         prepare(&app, &View::Home);
                         let state = app.global::<AppState>();
                         state.set_comments(ModelRc::default());
@@ -649,6 +868,7 @@ async fn worker(
                         state.set_setup_open(false);
                         state.set_error("".into());
                         state.set_watch_note(note.into());
+                        state.set_startup_step(2);
                         state.set_status("Loading recommendations…".into());
                     });
                     current_view = View::Home;
@@ -659,18 +879,12 @@ async fn worker(
                         .await
                         .unwrap_or_default();
                     initial_feed = feed.pages == 0;
-                    load = Some((false, generation.load(Ordering::Relaxed)));
-                    view_epoch = generation.load(Ordering::Relaxed);
+                    load = Some((false, epoch));
+                    view_epoch = epoch;
                 }
                 result => {
                     let message = match result { Ok(Err(e)) => e.to_string(), _ => "Connecting timed out. Unlock your keyring and check your internet connection, then retry.".into() };
-                    match tokio::task::spawn_blocking(browser::discover).await {
-                        Ok(Ok(found)) => {
-                            profiles = found.profiles.clone();
-                            publish_profiles(&weak, found, Some(message));
-                        }
-                        _ => fail(&weak, message),
-                    }
+                    fail(&weak, message);
                     continue;
                 }
             }
@@ -875,7 +1089,8 @@ fn fail_page(
         }
         let state = app.global::<AppState>();
         state.set_error(message.into());
-        state.set_initializing(false);
+        // During start-up the splash shows the failure with retry options.
+        state.set_startup_failed(state.get_initializing());
         state.set_busy(false);
         state.set_refreshing(false);
         state.set_status("".into());
@@ -886,7 +1101,7 @@ fn fail(weak: &slint::Weak<AppWindow>, message: String) {
     update(weak, move |app| {
         let state = app.global::<AppState>();
         state.set_error(message.into());
-        state.set_initializing(false);
+        state.set_startup_failed(state.get_initializing());
         state.set_refreshing(false);
         state.set_status("".into());
         state.set_busy(false);

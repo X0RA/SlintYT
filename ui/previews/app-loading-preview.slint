@@ -1,7 +1,38 @@
+import { Button, Palette } from "std-widgets.slint";
 import { AppLoading } from "../components/app-loading.slint";
+import { AppState } from "../state.slint";
 export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData } from "../state.slint";
 export component AppWindow inherits Window {
     title: "Startup loading preview";
-    width: 720px; height: 650px;
-    AppLoading { message: "Connecting to YouTube…"; }
+    width: 720px; height: 720px; background: #0e0e10;
+    private property <string> last;
+    init => {
+        Palette.color-scheme = ColorScheme.dark;
+        AppState.startup-label = "Helium · Profile 2";
+        AppState.startup-initial = "H";
+        AppState.startup-step = 1;
+    }
+    VerticalLayout {
+        HorizontalLayout {
+            Button { text: "Session"; clicked => { AppState.startup-failed = false; AppState.startup-step = 0; } }
+            Button { text: "Connecting"; clicked => { AppState.startup-failed = false; AppState.startup-step = 1; } }
+            Button { text: "Feed"; clicked => { AppState.startup-failed = false; AppState.startup-step = 2; } }
+        }
+        HorizontalLayout {
+            Button { text: "Cookie error"; clicked => { AppState.startup-step = 0; AppState.startup-failed = true; AppState.error = "This profile has no usable YouTube sign-in. Sign in to YouTube in that profile and retry."; } }
+            Button { text: "Offline"; clicked => { AppState.startup-step = 1; AppState.startup-failed = true; AppState.error = "Check your internet connection. If you were signed out, sign in to YouTube in Helium and try again."; } }
+            Button { text: "Feed error"; clicked => { AppState.startup-step = 2; AppState.startup-failed = true; AppState.error = "YouTube returned an unfamiliar page format. Please refresh or update the app."; } }
+            Button { text: "No profile"; clicked => { AppState.startup-label = ""; } }
+        }
+        HorizontalLayout {
+            Button { text: "Long profile"; clicked => { AppState.startup-label = "Example Browser · An extremely long browser profile name for testing"; } }
+            Button { text: "Compact"; clicked => { root.width = root.width < 600px ? 720px : 480px; root.height = root.width < 600px ? 540px : 720px; } }
+        }
+        Text { text: root.last; color: #8a8a93; accessible-role: text; accessible-label: self.text; }
+        AppLoading {
+            vertical-stretch: 1;
+            retry => { AppState.startup-failed = false; AppState.startup-step = 0; root.last = "Retry requested"; }
+            change-browser => { root.last = "Profile picker requested"; }
+        }
+    }
 }

@@ -160,6 +160,14 @@ impl Drop for Session {
 pub(crate) async fn authenticated_client(
     selection: &Selection,
 ) -> Result<(RustyPipe, String, IdentityCapture)> {
+    authenticate(selection, || {}).await
+}
+
+/// `session_read` runs once the browser cookies are loaded, before YouTube is contacted.
+async fn authenticate(
+    selection: &Selection,
+    session_read: impl FnOnce(),
+) -> Result<(RustyPipe, String, IdentityCapture)> {
     let cookies = cookies::read(selection).await?;
     let identity = IdentityCapture::default();
     let client = RustyPipe::builder()
@@ -168,14 +176,15 @@ pub(crate) async fn authenticated_client(
         .build()?;
     client.user_auth_set_cookie_txt(&cookies).await
             .map_err(|_| anyhow::anyhow!("This profile has no usable YouTube sign-in. Sign in to YouTube in that profile and retry."))?;
+    session_read();
     client.user_auth_check_cookie().await
             .map_err(|_| anyhow::anyhow!("Could not verify this YouTube session. Check your internet connection and sign in to YouTube in the selected profile, then retry."))?;
     Ok((client, cookies, identity))
 }
 
 impl Session {
-    pub async fn connect(selection: &Selection) -> Result<Self> {
-        let (client, cookies, identity) = authenticated_client(selection).await?;
+    pub async fn connect(selection: &Selection, session_read: impl FnOnce()) -> Result<Self> {
+        let (client, cookies, identity) = authenticate(selection, session_read).await?;
         let cache_store = identity
             .account()
             .and_then(|account| crate::cache::Cache::new(&account.filename()));

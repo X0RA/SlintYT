@@ -1,21 +1,48 @@
 import { Button, Palette } from "std-widgets.slint";
 import { BrowserPicker } from "../views/browser-picker.slint";
-import { AppState } from "../state.slint";
+import { AppState, BrowserProfile } from "../state.slint";
 export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData } from "../state.slint";
 export component AppWindow inherits Window {
     title: "Browser picker preview";
-    width: 840px; height: 760px; background: #0f0f0f;
+    width: 900px; height: 860px; background: #0e0e10;
+    private property <string> last: "Mock profile selection";
+    private property <[BrowserProfile]> grouped: [
+        { name: "Profile 2", path: "/home/example/.config/net.imput.helium/Profile 2", group: "Helium", initials: "H", tone: #3b4a63, root: "~/.config/net.imput.helium", first: true },
+        { name: "Default", path: "/home/example/.config/BraveSoftware/Brave-Browser/Default", group: "Brave", initials: "B", tone: #5e4a35, root: "~/.config/BraveSoftware/Brave-Browser", first: true },
+        { name: "Default", path: "/home/example/.config/chromium/Default", group: "Chromium", initials: "C", tone: #2e414e, root: "~/.config/chromium", first: true },
+        { name: "Profile 1", path: "/home/example/.config/chromium/Profile 1", group: "Chromium", initials: "C", tone: #2e414e, root: "~/.config/chromium" },
+        { name: "A profile folder with a very long name that should elide", path: "/home/example/.config/chromium/A profile folder with a very long name that should elide/and/an/even/longer/path", group: "Chromium", initials: "C", tone: #2e414e, root: "~/.config/chromium" },
+        { name: "Guest Profile", path: "/home/example/.config/chromium/Guest Profile", group: "Chromium", initials: "C", tone: #2e414e, root: "~/.config/chromium" },
+        { name: "abcd1234.default-release", path: "/home/example/.mozilla/firefox/abcd1234.default-release", group: "Firefox", initials: "F", tone: #5a3f5e, root: "~/.mozilla/firefox", first: true },
+        { name: "scoped_dir1u6oJ7", path: "/home/example/.config/chromium-headless/scoped_dir1u6oJ7/Default", group: "Temporary profiles", initials: "TP", tone: #2e2e35, root: "made by automation and test tools", first: true, temporary: true },
+        { name: "scoped_dir375MJK", path: "/home/example/.config/chromium-headless/scoped_dir375MJK/Default", group: "Temporary profiles", initials: "TP", tone: #2e2e35, root: "made by automation and test tools", temporary: true }
+    ];
     init => {
         Palette.color-scheme = ColorScheme.dark;
-        AppState.profiles = [{ label: "chromium · Example Browser · Default", path: "/example/.config/browser/Default" }, { label: "firefox · Firefox · Personal", path: "/example/.mozilla/firefox/personal" }];
+        AppState.profiles = root.grouped;
+        AppState.temporary-profiles = 2;
+        AppState.selected-profile = 0;
+        AppState.connected = true;
     }
     VerticalLayout {
-        padding: 16px; spacing: 12px;
         HorizontalLayout {
-            Button { text: "Empty"; clicked => { AppState.profiles = []; } }
-            Button { text: "Loading"; clicked => { AppState.busy = !AppState.busy; AppState.status = "Reading browser cookies…"; } }
-            Button { text: "Error"; clicked => { AppState.busy = false; AppState.error = "No YouTube cookies found. Sign in to YouTube in this profile, then retry."; } }
+            Button { text: "Profiles"; clicked => { AppState.manual-profile-path = ""; AppState.busy = false; AppState.profiles = root.grouped; AppState.temporary-profiles = 2; AppState.selected-profile = 0; AppState.error = ""; AppState.scan-warning = ""; } }
+            Button { text: "Empty"; clicked => { AppState.profiles = []; AppState.temporary-profiles = 0; AppState.selected-profile = -1; } }
+            Button { text: "Scanning"; clicked => { AppState.busy = !AppState.busy; } }
         }
-        BrowserPicker {}
+        HorizontalLayout {
+            Button { text: "Scan limit"; clicked => { AppState.scan-warning = "The scan stopped at its limit, so some profiles may be missing."; } }
+            Button { text: "Error"; clicked => { AppState.error = "No cookie database was found in this exact profile. Choose another profile or check the path."; } }
+            Button { text: "First run"; clicked => { AppState.connected = !AppState.connected; } }
+            Button { text: "Compact"; clicked => { root.width = root.width < 700px ? 900px : 480px; root.height = root.width < 700px ? 640px : 860px; } }
+        }
+        Text { text: root.last; color: #8a8a93; accessible-role: text; accessible-label: self.text; }
+        BrowserPicker {
+            vertical-stretch: 1;
+            scan => { AppState.profiles = root.grouped; AppState.selected-profile = 0; AppState.busy = false; root.last = "Scan completed"; }
+            browse => { AppState.manual-profile-path = "/example/browser/Profile 3"; root.last = "Mock folder chosen"; }
+            use-profile(index, keyring) => { root.last = "Selected profile " + index + ", keyring " + keyring; }
+            use-folder(path, keyring) => { root.last = "Selected folder " + path + ", keyring " + keyring; }
+        }
     }
 }

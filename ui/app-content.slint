@@ -40,7 +40,7 @@ export component AppContent inherits Rectangle {
     background: Theme.background;
     forward-focus: app-keys;
     app-keys := FocusScope {
-    if AppState.initializing : AppLoading { message: AppState.connected ? "Loading your home feed…" : "Connecting to YouTube…"; }
+    if AppState.initializing : AppLoading {}
     if AppState.player-open : VideoPlayer {
         close => { AppState.player-breadcrumb(-1); }
         toggle => { AppState.player-toggle(); }
@@ -51,21 +51,19 @@ export component AppContent inherits Rectangle {
         select-quality(index) => { AppState.player-select-quality(index); }
         select-subtitle(index) => { AppState.player-select-subtitle(index); }
     }
-    if !AppState.initializing && !AppState.player-open : Rectangle {
+    // The profile picker is a page of its own, without the rail or search bar.
+    if !AppState.initializing && !AppState.player-open && AppState.setup-open : BrowserPicker {}
+    if !AppState.initializing && !AppState.player-open && !AppState.setup-open : Rectangle {
         if !root.narrow : NavRail { x: 0px; y: 0px; width: 80px; height: parent.height; active: root.active; navigate(kind) => { root.navigate(kind); } }
         if root.narrow : NavRail { y: parent.height - 72px; width: parent.width; height: 72px; horizontal: true; active: root.active; navigate(kind) => { root.navigate(kind); } }
         FocusScope {
             x: root.narrow ? 0px : 80px; y: 0px;
             width: parent.width - self.x; height: parent.height - (root.narrow ? 72px : 0px);
             VerticalLayout {
-                padding-top: AppState.setup-open || AppState.settings-open ? root.inset : 0px;
+                padding-top: AppState.settings-open ? root.inset : 0px;
                 padding-left: root.narrow ? 16px : 32px; padding-right: root.narrow ? 16px : 32px; padding-bottom: 0px;
-                if AppState.setup-open : ScrollView {
-                    horizontal-scrollbar-policy: always-off;
-                    HorizontalLayout { padding: 24px; alignment: center; BrowserPicker { max-width: 780px; horizontal-stretch: 1; } }
-                }
-                if !AppState.setup-open && AppState.settings-open : SettingsPage {}
-                if !AppState.setup-open && !AppState.settings-open : VideoFeed { top-inset: root.inset; }
+                if AppState.settings-open : SettingsPage {}
+                if !AppState.settings-open : VideoFeed { top-inset: root.inset; }
             }
             HorizontalLayout {
                 y: 24px; height: 48px; padding-left: root.narrow ? 16px : 32px; padding-right: self.padding-left; alignment: center;
@@ -78,7 +76,7 @@ export component AppContent inherits Rectangle {
         TouchArea { clicked => { AppState.player-sidebar-open = false; } }
         NavRail { x: 0px; y: 0px; width: 80px; height: parent.height; active: root.active; navigate(kind) => { root.navigate(kind); } }
     }
-    if AppState.account-menu-open : Rectangle {
+    if AppState.account-menu-open && !AppState.initializing && !AppState.setup-open : Rectangle {
         TouchArea { clicked => { AppState.account-menu-open = false; } }
         account-menu := MenuSurface {
             x: root.narrow ? max(8px, parent.width - self.width - 8px) : 72px;
@@ -137,7 +135,7 @@ export component AppContent inherits Rectangle {
                     }
                 }
                 change-browser := MenuItem { text: "Change browser"; icon: "globe"; trailing-chevron: true; min-height: 44px;
-                    clicked => { AppState.account-menu-open = false; AppState.settings-open = false; AppState.setup-open = true; AppState.error = ""; AppState.scan-profiles(); }
+                    clicked => { AppState.change-browser(); }
                 }
             }
         }
@@ -146,7 +144,7 @@ export component AppContent inherits Rectangle {
         toast-text := Text { text: AppState.toast; color: Theme.background; font-size: 13px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
     }
     Timer { interval: 3500ms; running: AppState.toast != ""; triggered => { AppState.toast = ""; } }
-    KeyBinding { keys: @keys(Slash); enabled: !AppState.player-open; activated => { AppState.search-focus-serial += 1; } }
-    KeyBinding { keys: @keys(Escape); enabled: !AppState.player-open; activated => { AppState.account-menu-open = false; AppState.search-text = ""; app-keys.focus(); } }
+    KeyBinding { keys: @keys(Slash); enabled: !AppState.player-open && !AppState.initializing && !AppState.setup-open; activated => { AppState.search-focus-serial += 1; } }
+    KeyBinding { keys: @keys(Escape); enabled: !AppState.player-open && !AppState.initializing && !AppState.setup-open; activated => { AppState.account-menu-open = false; AppState.search-text = ""; app-keys.focus(); } }
     }
 }

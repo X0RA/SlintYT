@@ -1,89 +1,375 @@
-import { CheckBox, ComboBox, LineEdit, ListView } from "std-widgets.slint";
+import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
 import { AppState } from "../state.slint";
 import { ActionButton } from "../components/action-button.slint";
+import { Choice } from "../components/choice.slint";
+import { Icon } from "../components/icon.slint";
 
-export component BrowserPicker inherits Rectangle {
-    private property <int> selected: -1;
-    private property <bool> manual: false;
-    private property <string> manual-path;
-    private property <int> keyring-index: 0;
-    background: Theme.surface;
-    border-radius: Theme.radius;
-    border-width: 1px;
-    border-color: Theme.border;
-    VerticalLayout {
-        padding: 28px;
-        spacing: 14px;
-        Text { text: "Your YouTube, in SlintYT"; color: Theme.text; font-size: 26px; font-weight: 700; }
-        Text { text: "Choose the browser profile where you’re signed in to YouTube."; color: Theme.muted; font-size: 14px; wrap: word-wrap; }
-        Text { text: "Use this profile reads its YouTube cookies to load your recommendations and watch history. Your browser may ask to unlock its keyring."; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
-        if AppState.scan-warning != "" : Text { text: AppState.scan-warning; color: #e8ba72; wrap: word-wrap; font-size: 12px; }
-        HorizontalLayout {
-            Text { text: "BROWSER PROFILES"; color: Theme.muted; font-size: 11px; font-weight: 600; vertical-alignment: center; }
-            Rectangle { horizontal-stretch: 1; background: transparent; }
-            rescan := ActionButton { text: "Scan again"; enabled: !AppState.busy; clicked => { root.selected = -1; AppState.scan-profiles(); } }
-        }
-        if AppState.profiles.length > 0 && !root.manual : ListView {
-            min-height: 130px;
-            preferred-height: 210px;
-            for profile[index] in AppState.profiles : Rectangle {
-                height: 76px;
-                border-radius: 8px;
-                border-width: 1px;
-                border-color: root.selected == index || profile-focus.has-focus ? Theme.accent : Theme.border;
-                background: root.selected == index ? #302020 : profile-touch.has-hover ? Theme.raised : Theme.surface;
-                accessible-role: button;
-                accessible-label: profile.label + " " + profile.path;
-                accessible-enabled: !AppState.busy;
-                accessible-action-default => { if !AppState.busy { root.selected = index; } }
-                HorizontalLayout {
-                    padding: 14px;
-                    spacing: 12px;
-                    Text { width: 18px; text: root.selected == index ? "●" : "○"; color: root.selected == index ? Theme.accent : Theme.muted; vertical-alignment: center; }
-                    VerticalLayout {
-                        horizontal-stretch: 1;
-                        spacing: 5px;
-                        Text { text: profile.label; color: Theme.text; font-size: 14px; overflow: elide; }
-                        Text { text: profile.path; color: Theme.muted; font-size: 11px; overflow: elide; }
-                    }
-                }
-                profile-focus := FocusScope {
-                    key-pressed(event) => { if event.text == " " || event.text == "\n" { root.selected = index; return accept; } return reject; }
-                }
-                profile-touch := TouchArea { enabled: !AppState.busy; mouse-cursor: pointer; clicked => { profile-focus.focus(); root.selected = index; } }
+// A selectable profile: radio, folder name and full path.
+component ProfileRow inherits Rectangle {
+    in property <string> name;
+    in property <string> path;
+    in property <bool> checked;
+    in property <bool> enabled: true;
+    callback picked();
+    height: 68px;
+    border-radius: 12px;
+    background: root.checked ? #17171b : touch.has-hover && root.enabled ? #121215 : transparent;
+    border-width: root.checked || focus.has-focus ? 1px : 0px;
+    border-color: focus.has-focus ? #7aa2ff : #3a3a42;
+    accessible-role: button;
+    accessible-checkable: true;
+    accessible-checked: root.checked;
+    accessible-label: root.name;
+    accessible-description: root.path;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { root.picked(); } }
+    HorizontalLayout {
+        padding-left: 12px; padding-right: 12px; spacing: 16px;
+        alignment: stretch;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 20px; height: 20px; border-radius: 10px; border-width: 2px;
+                border-color: root.checked ? Theme.accent : #3f3f46;
+                if root.checked : Rectangle { width: 10px; height: 10px; border-radius: 5px; background: Theme.accent; }
             }
         }
-        if AppState.profiles.length == 0 && !root.manual : Text {
-            text: AppState.busy ? "Looking for browser profiles…" : "No browser profiles found. You can scan again or enter a profile path below.";
-            color: Theme.muted;
-            wrap: word-wrap;
-            min-height: 70px;
+        VerticalLayout {
+            horizontal-stretch: 1; alignment: center; spacing: 3px;
+            Text { text: root.name; font-size: 15px; font-weight: 500; color: Theme.strong; overflow: elide; }
+            Text { text: root.path; font-size: 12px; font-family: "monospace"; color: #71717a; overflow: elide; }
         }
-        CheckBox { text: "Enter a profile path manually"; checked <=> root.manual; enabled: !AppState.busy; }
-        if root.manual : HorizontalLayout {
-            spacing: 12px;
-            browser := ComboBox { model: ["brave", "chrome", "chromium", "edge", "firefox", "opera", "safari", "vivaldi", "whale"]; current-index: 2; enabled: !AppState.busy; }
-            LineEdit { text <=> root.manual-path; placeholder-text: "Absolute profile path (Safari: cookie file)"; enabled: !AppState.busy; }
-            manual-connect := ActionButton { text: "Use profile"; primary: true; enabled: !AppState.busy && root.manual-path != ""; clicked => { AppState.connect-manual(browser.current-value, root.manual-path, root.keyring-index); } }
+    }
+    touch := TouchArea { enabled: root.enabled; mouse-cursor: pointer; clicked => { focus.focus(); root.picked(); } }
+    focus := FocusScope {
+        enabled: root.enabled; focus-on-click: false;
+        key-pressed(event) => { if event.text == " " || event.text == "\n" { root.picked(); return accept; } return reject; }
+    }
+}
+
+// Rounded notice with an info icon, optional action button.
+component Notice inherits Rectangle {
+    in property <string> message;
+    in property <string> action;
+    in property <color> tint;
+    in property <color> action-tint;
+    callback activated();
+    border-radius: 14px;
+    background: root.tint.with-alpha(0.07);
+    border-width: 1px;
+    border-color: root.tint.with-alpha(0.16);
+    accessible-role: text;
+    accessible-label: root.message;
+    HorizontalLayout {
+        padding-left: 16px; padding-right: 12px; padding-top: 12px; padding-bottom: 12px; spacing: 12px;
+        VerticalLayout {
+            alignment: center;
+            Path {
+                width: 16px; height: 16px; viewbox-width: 24; viewbox-height: 24;
+                stroke: root.tint; stroke-width: 1.4px; fill: transparent; stroke-line-cap: round;
+                commands: "M21 12a9 9 0 1 1-18 0a9 9 0 1 1 18 0zM12 7.5v5.5M12 16.5v0.01";
+            }
         }
-        HorizontalLayout {
-            spacing: 12px;
-            Text { text: "Chromium keyring"; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
-            ComboBox { model: ["Automatic (browser flags)", "GNOME keyring", "KWallet 6", "KWallet 5", "KWallet", "Basic text"]; current-index <=> root.keyring-index; enabled: !AppState.busy; }
+        Text { horizontal-stretch: 1; text: root.message; font-size: 13px; color: root.tint; wrap: word-wrap; vertical-alignment: center; }
+        if root.action != "" : VerticalLayout {
+            alignment: center;
+            Rectangle {
+                height: 32px; width: action-label.preferred-width + 24px; border-radius: 16px;
+                background: action-touch.has-hover ? root.tint.with-alpha(0.2) : root.tint.with-alpha(0.12);
+                accessible-role: button; accessible-label: root.action;
+                accessible-action-default => { root.activated(); }
+                action-label := Text { text: root.action; font-size: 12.5px; font-weight: 600; color: root.action-tint; }
+                border-width: action-focus.has-focus ? 1px : 0px; border-color: #7aa2ff;
+                action-touch := TouchArea { mouse-cursor: pointer; clicked => { action-focus.focus(); root.activated(); } }
+                action-focus := FocusScope {
+                    key-pressed(event) => {
+                        if event.text == " " || event.text == "\n" { root.activated(); return accept; }
+                        return reject;
+                    }
+                }
+            }
         }
-        if AppState.error != "" : Text { text: AppState.error; color: #ffaaa5; wrap: word-wrap; font-size: 13px; }
-        if AppState.status != "" : Text { text: AppState.status; color: Theme.muted; wrap: word-wrap; font-size: 13px; }
-        Text { text: "SlintYT remembers your browser and profile. Cookies stay out of your settings file."; color: Theme.muted; wrap: word-wrap; font-size: 12px; }
-        HorizontalLayout {
-            spacing: 12px;
-            if AppState.connected : ActionButton { text: "Back"; enabled: !AppState.busy; clicked => { AppState.setup-open = false; AppState.error = ""; AppState.status = ""; } }
-            Rectangle { horizontal-stretch: 1; background: transparent; }
-            if !root.manual : use-profile := ActionButton {
-                text: AppState.busy ? "Please wait…" : "Use this profile";
-                primary: true;
-                enabled: !AppState.busy && root.selected >= 0 && root.selected < AppState.profiles.length;
-                clicked => { AppState.connect-profile(root.selected, root.keyring-index); }
+    }
+}
+
+component CookieNotice inherits HorizontalLayout {
+    spacing: 8px; cross-axis-alignment: center;
+    Path {
+        width: 14px; height: 14px; viewbox-width: 24; viewbox-height: 24;
+        stroke: Theme.subtle; stroke-width: 1.2px; fill: transparent; stroke-line-cap: round;
+        commands: "M7 11h10a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2zM8 11V8a4 4 0 0 1 8 0v3";
+    }
+    Text {
+        horizontal-stretch: 1; text: "Cookies are never saved to your settings file.";
+        font-size: 12.5px; color: Theme.subtle; overflow: elide;
+        accessible-role: text; accessible-label: self.text;
+    }
+}
+
+// Full-page profile picker: grouped browser profiles, a manual folder option,
+// the Chromium keyring choice and a pinned footer with the connect action.
+export component BrowserPicker inherits Rectangle {
+    callback scan();
+    callback browse();
+    callback use-profile(int, int);
+    callback use-folder(string, int);
+    scan => { AppState.scan-profiles(); }
+    browse => { AppState.browse-profile-folder(); }
+    use-profile(index, keyring) => { AppState.connect-profile(index, keyring); }
+    use-folder(path, keyring) => { AppState.connect-manual("", path, keyring); }
+    private property <int> selected <=> AppState.selected-profile;
+    changed selected => {
+        if root.selected >= 0 && root.selected < AppState.profiles.length && AppState.profiles[root.selected].temporary {
+            root.show-temporary = true;
+        }
+    }
+    init => {
+        root.show-temporary = root.selected >= 0 && root.selected < AppState.profiles.length && AppState.profiles[root.selected].temporary;
+    }
+    private property <bool> manual: false;
+    private property <string> manual-path <=> AppState.manual-profile-path;
+    changed manual-path => { if root.manual-path != "" { root.selected = -1; root.manual = true; } }
+    private property <int> keyring-index: 0;
+    private property <bool> show-temporary: false;
+    private property <bool> narrow: root.width < 640px;
+    private property <length> side: root.narrow ? 16px : 32px;
+    private property <string> choice: root.manual-path != "" ? "this folder"
+        : root.selected >= 0 && root.selected < AppState.profiles.length ? AppState.profiles[root.selected].name : "";
+    function pick(index: int) {
+        root.selected = index;
+        root.manual-path = "";
+    }
+    function connect() {
+        if AppState.busy || AppState.profile-dialog-open { return; }
+        if root.manual-path != "" {
+            root.use-folder(root.manual-path, root.keyring-index);
+        } else if root.choice != "" {
+            root.use-profile(root.selected, root.keyring-index);
+        }
+    }
+    background: Theme.background;
+    VerticalLayout {
+        ScrollView {
+            vertical-stretch: 1;
+            horizontal-scrollbar-policy: always-off;
+            content-width: self.visible-width;
+            HorizontalLayout {
+                alignment: center;
+                padding-left: root.side; padding-right: root.side;
+                padding-top: root.narrow ? 32px : 56px; padding-bottom: root.narrow ? 24px : 32px;
+                VerticalLayout {
+                    max-width: 696px; horizontal-stretch: 1;
+                    HorizontalLayout {
+                        spacing: 24px;
+                        VerticalLayout {
+                            horizontal-stretch: 1; spacing: 12px;
+                            title := Text {
+                                text: "Where are you signed in?"; font-size: root.narrow ? 26px : 32px; font-weight: 700;
+                                letter-spacing: -0.9px; color: Theme.strong; wrap: word-wrap;
+                                accessible-role: text; accessible-label: self.text;
+                            }
+                            Text {
+                                text: "Pick the browser profile you use YouTube in. Its YouTube cookies load your feed, subscriptions and history. Your browser may ask to unlock its keyring.";
+                                font-size: 14px; color: Theme.muted; wrap: word-wrap; max-width: 520px;
+                            }
+                        }
+                        if !root.narrow : VerticalLayout {
+                            alignment: end;
+                            rescan := ActionButton {
+                                text: AppState.busy ? "Scanning…" : "Scan again"; icon: "refresh"; icon-size: 15px; outlined: true; height: 40px;
+                                enabled: !AppState.busy && !AppState.profile-dialog-open;
+                                clicked => { root.selected = -1; root.scan(); }
+                            }
+                        }
+                    }
+                    if root.narrow : HorizontalLayout {
+                        padding-top: 16px; alignment: start;
+                        ActionButton {
+                            text: AppState.busy ? "Scanning…" : "Scan again"; icon: "refresh"; icon-size: 15px; outlined: true; height: 40px;
+                            enabled: !AppState.busy && !AppState.profile-dialog-open;
+                            clicked => { root.selected = -1; root.scan(); }
+                        }
+                    }
+                    Rectangle { height: 36px; }
+                    if AppState.profiles.length == 0 : Text {
+                        text: AppState.busy ? "Looking for browser profiles…" : "No browser profiles found. Scan again, or use a profile folder directly below.";
+                        font-size: 14px; color: Theme.subtle; wrap: word-wrap;
+                    }
+                    for profile[index] in AppState.profiles : VerticalLayout {
+                        if !profile.temporary || root.show-temporary : VerticalLayout {
+                            if profile.first : VerticalLayout {
+                                padding-top: index == 0 ? 0px : 28px; padding-bottom: 10px;
+                                HorizontalLayout {
+                                    spacing: 12px;
+                                    Rectangle {
+                                        width: 28px; height: 28px; border-radius: 9px; background: profile.tone;
+                                        Text { text: profile.initials; font-size: 11px; font-weight: 700; color: Theme.strong; }
+                                    }
+                                    Text { text: profile.group; font-size: 14px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
+                                    Text { horizontal-stretch: 1; text: profile.root; font-size: 12.5px; color: #71717a; vertical-alignment: center; overflow: elide; }
+                                }
+                            }
+                            if profile.first : Rectangle { height: 1px; background: Theme.row; }
+                            ProfileRow {
+                                name: profile.name; path: profile.path;
+                                checked: root.selected == index && root.manual-path == "";
+                                enabled: !AppState.busy && !AppState.profile-dialog-open;
+                                picked => { root.pick(index); }
+                            }
+                            Rectangle { height: 1px; background: Theme.row; }
+                        }
+                    }
+                    if AppState.temporary-profiles > 0 : HorizontalLayout {
+                        padding-top: 20px; alignment: start;
+                        temporary := Rectangle {
+                            height: 40px; width: temporary-layout.preferred-width; border-radius: 20px;
+                            background: temporary-touch.has-hover ? Theme.raised : transparent;
+                            border-width: temporary-focus.has-focus ? 1px : 0px; border-color: #7aa2ff;
+                            accessible-role: button;
+                            accessible-label: temporary-text.text;
+                            accessible-expandable: true;
+                            accessible-expanded: root.show-temporary;
+                            accessible-action-default => { root.show-temporary = !root.show-temporary; }
+                            temporary-layout := HorizontalLayout {
+                                padding-left: 12px; padding-right: 14px; spacing: 10px;
+                                VerticalLayout {
+                                    alignment: center;
+                                    Icon { name: "chevron"; width: 14px; height: 14px; tint: Theme.muted; transform-rotation: root.show-temporary ? 90deg : 0deg; }
+                                }
+                                temporary-text := Text {
+                                    text: root.show-temporary ? "Hide temporary profiles" : "Show " + AppState.temporary-profiles + " temporary profiles";
+                                    font-size: 13px; color: Theme.muted; vertical-alignment: center;
+                                }
+                            }
+                            temporary-touch := TouchArea { mouse-cursor: pointer; clicked => { temporary-focus.focus(); root.show-temporary = !root.show-temporary; } }
+                            temporary-focus := FocusScope {
+                                key-pressed(event) => {
+                                    if event.text == " " || event.text == "\n" { root.show-temporary = !root.show-temporary; return accept; }
+                                    return reject;
+                                }
+                            }
+                        }
+                    }
+                    if AppState.scan-warning != "" : VerticalLayout {
+                        padding-top: 24px;
+                        Notice {
+                            message: AppState.scan-warning; action: "Enter a path"; tint: #fbbf24; action-tint: #fde68a;
+                            activated => { root.manual = true; }
+                        }
+                    }
+                    if AppState.error != "" : VerticalLayout {
+                        padding-top: 24px;
+                        Notice { message: AppState.error; tint: #f87171; }
+                    }
+                    Rectangle { height: 28px; }
+                    card := Rectangle {
+                        border-radius: 14px; background: Theme.surface; border-width: 1px; border-color: #1e1e23;
+                        VerticalLayout {
+                            manual-toggle := Rectangle {
+                                border-radius: 14px;
+                                border-width: manual-focus.has-focus ? 1px : 0px; border-color: #7aa2ff;
+                                accessible-role: button;
+                                accessible-label: "Use a profile folder directly";
+                                accessible-expandable: true;
+                                accessible-expanded: root.manual;
+                                accessible-action-default => { root.manual = !root.manual; }
+                                HorizontalLayout {
+                                    padding-left: 18px; padding-right: 18px; padding-top: 14px; padding-bottom: 14px; spacing: 24px;
+                                    VerticalLayout {
+                                        horizontal-stretch: 1; spacing: 3px;
+                                        Text { text: "Use a profile folder directly"; font-size: 14px; font-weight: 500; color: Theme.text; }
+                                        Text { text: "For portable browsers or profiles the scan didn't find."; font-size: 13px; color: Theme.subtle; wrap: word-wrap; }
+                                    }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Icon { name: "down"; width: 16px; height: 16px; tint: Theme.subtle; transform-rotation: root.manual ? 180deg : 0deg; }
+                                    }
+                                }
+                                TouchArea { mouse-cursor: pointer; clicked => { manual-focus.focus(); root.manual = !root.manual; } }
+                                manual-focus := FocusScope {
+                                    key-pressed(event) => {
+                                        if event.text == " " || event.text == "\n" { root.manual = !root.manual; return accept; }
+                                        return reject;
+                                    }
+                                }
+                            }
+                            if root.manual : HorizontalLayout {
+                                padding-left: 18px; padding-right: 18px; padding-bottom: 16px; spacing: 10px;
+                                Rectangle {
+                                    height: 40px; horizontal-stretch: 1; border-radius: 10px; border-width: 1px;
+                                    border-color: path-input.has-focus ? #4a4a55 : Theme.border; background: Theme.raised;
+                                    path-input := TextInput {
+                                        x: 12px; width: parent.width - 24px; height: parent.height;
+                                        vertical-alignment: center; single-line: true;
+                                        font-family: "monospace"; font-size: 13px; color: Theme.text;
+                                        text <=> root.manual-path;
+                                        enabled: !AppState.busy && !AppState.profile-dialog-open;
+                                        accessible-label: "Profile folder";
+                                        edited => { if self.text != "" { root.selected = -1; } }
+                                        accepted => { root.connect(); }
+                                    }
+                                    if root.manual-path == "" : Text {
+                                        x: 12px; width: parent.width - 24px; height: parent.height; vertical-alignment: center;
+                                        text: "Profile folder path (or Safari cookie file)";
+                                        font-family: "monospace"; font-size: 13px; color: #52525b; overflow: elide;
+                                    }
+                                }
+                                ActionButton {
+                                    text: AppState.profile-dialog-open ? "Choosing…" : "Browse…"; outlined: true; height: 40px;
+                                    enabled: !AppState.busy && !AppState.profile-dialog-open;
+                                    clicked => { root.browse(); }
+                                }
+                            }
+                            Rectangle { height: 1px; background: #1f1f24; }
+                            HorizontalLayout {
+                                padding-left: 18px; padding-right: 18px; padding-top: 14px; padding-bottom: 14px; spacing: 24px;
+                                VerticalLayout {
+                                    horizontal-stretch: 1; spacing: 3px; alignment: center;
+                                    Text { text: "Chromium keyring"; font-size: 14px; font-weight: 500; color: Theme.text; }
+                                    Text { text: "Where the browser keeps its cookie password. Automatic reads the browser's own flags."; font-size: 13px; color: Theme.subtle; wrap: word-wrap; }
+                                }
+                                VerticalLayout {
+                                    alignment: center;
+                                    keyring := Choice {
+                                        label: "Chromium keyring";
+                                        options: ["Automatic", "GNOME Keyring", "KWallet 6", "KWallet 5", "KWallet", "Basic (no keyring)"];
+                                        current-index <=> root.keyring-index;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        footer := Rectangle {
+            height: root.narrow ? 104px : 72px;
+            background: #0e0e10e0;
+            Rectangle { height: 1px; background: Theme.line; }
+            footer-content := Rectangle {
+                x: (parent.width - self.width) / 2; width: min(696px, parent.width - 2 * root.side);
+                height: parent.height;
+                if root.narrow : CookieNotice { y: 12px; height: 22px; width: parent.width; }
+                HorizontalLayout {
+                    y: root.narrow ? 46px : 14px; height: 44px; spacing: 16px;
+                    if !root.narrow : CookieNotice { horizontal-stretch: 1; }
+                    if root.narrow : Rectangle { horizontal-stretch: 1; }
+                    if AppState.connected : back := ActionButton {
+                        text: "Back"; quiet: true; height: 44px; enabled: !AppState.busy && !AppState.profile-dialog-open;
+                        clicked => {
+                            AppState.setup-open = false; AppState.error = ""; AppState.status = "";
+                            if AppState.videos.length == 0 { AppState.load-feed(false); }
+                        }
+                    }
+                    use := ActionButton {
+                        text: root.choice == "" ? "Use this profile" : "Use " + root.choice;
+                        width-limit: root.narrow ? 240px : 280px;
+                        primary: root.choice != ""; height: 44px;
+                        enabled: root.choice != "" && !AppState.busy && !AppState.profile-dialog-open;
+                        clicked => { root.connect(); }
+                    }
+                }
             }
         }
     }

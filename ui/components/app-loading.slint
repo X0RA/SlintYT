@@ -1,15 +1,166 @@
-import { Spinner } from "std-widgets.slint";
+import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
+import { AppState } from "../state.slint";
+import { ActionButton } from "action-button.slint";
 
+// One start-up stage: a dot while pending, a spinner while active,
+// a tick once done and a cross if it failed.
+component Step inherits HorizontalLayout {
+    in property <string> label;
+    // 0 pending, 1 active, 2 done, 3 failed
+    in property <int> state;
+    private property <angle> turn: mod(animation-tick() / 1ms, 800) / 800 * 360deg;
+    spacing: 12px;
+    accessible-role: text;
+    accessible-label: root.label + (root.state == 2 ? ", done" : root.state == 3 ? ", failed" : root.state == 1 ? ", in progress" : "");
+    Rectangle {
+        width: 18px; height: 18px; border-radius: 9px;
+        background: root.state == 2 ? #4ade801f : root.state == 3 ? #ef444424 : transparent;
+        if root.state == 0 : Rectangle { width: 6px; height: 6px; border-radius: 3px; background: #3f3f46; }
+        if root.state == 1 : Rectangle {
+            width: 14px; height: 14px; border-radius: 7px; border-width: 2px; border-color: #2e2e35;
+            Path {
+                width: 14px; height: 14px; viewbox-width: 14; viewbox-height: 14;
+                stroke: Theme.strong; stroke-width: 2px; fill: transparent;
+                commands: "M " + (7 + 6 * sin(root.turn)) + " " + (7 - 6 * cos(root.turn))
+                    + " A 6 6 0 0 1 " + (7 + 6 * sin(root.turn + 90deg)) + " " + (7 - 6 * cos(root.turn + 90deg));
+            }
+        }
+        if root.state == 2 : Path {
+            width: 11px; height: 11px; viewbox-width: 24; viewbox-height: 24;
+            commands: "M5 12.5l4.5 4.5L19 7.5"; stroke: #4ade80; stroke-width: 1.5px; fill: transparent; stroke-line-cap: round;
+        }
+        if root.state == 3 : Path {
+            width: 10px; height: 10px; viewbox-width: 24; viewbox-height: 24;
+            commands: "M6 6l12 12M18 6L6 18"; stroke: #f87171; stroke-width: 1.4px; fill: transparent; stroke-line-cap: round;
+        }
+    }
+    Text {
+        text: root.label; font-size: 13px; vertical-alignment: center;
+        color: root.state == 1 ? Theme.strong : root.state == 2 ? Theme.subtle : root.state == 3 ? #fca5a5 : #52525b;
+    }
+}
+
+// Start-up splash shown while connecting a profile and loading the first feed.
+// It switches to an error state when any stage fails.
 export component AppLoading inherits Rectangle {
-    in property <string> message: "Loading your YouTube…";
+    callback retry();
+    callback change-browser();
+    retry => { AppState.retry-startup(); }
+    change-browser => { AppState.change-browser(); }
+    private property <int> step: AppState.startup-step;
+    private property <bool> failed: AppState.startup-failed;
+    private property <float> breath: root.failed ? 0 : (1 - cos(mod(animation-tick() / 1ms, 2400) / 2400 * 360deg)) / 2;
+    private property <float> sweep: root.failed ? 0 : mod(animation-tick() / 1ms, 1300) / 1300;
+    function stage(index: int) -> int {
+        return index < root.step ? 2 : index == root.step ? (root.failed ? 3 : 1) : 0;
+    }
     background: Theme.background;
     VerticalLayout {
-        alignment: center;
-        padding: 48px;
-        spacing: 18px;
-        Text { text: "SlintYT"; color: Theme.text; font-size: 30px; font-weight: 700; horizontal-alignment: center; }
-        HorizontalLayout { alignment: center; Spinner { width: 32px; height: 32px; } }
-        Text { text: root.message; color: Theme.muted; font-size: 14px; wrap: word-wrap; horizontal-alignment: center; }
+        padding-left: 32px; padding-right: 32px; padding-bottom: 28px;
+        body := ScrollView {
+            vertical-stretch: 1;
+            horizontal-scrollbar-policy: always-off;
+            content-width: self.visible-width;
+            VerticalLayout {
+                min-height: body.visible-height;
+                padding-top: 24px; padding-bottom: 24px;
+                alignment: center;
+                HorizontalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 88px; height: 88px;
+                        // Accent glow that slowly breathes while work is in progress.
+                        Rectangle {
+                            border-radius: 28px; background: #18181b;
+                            drop-shadow-blur: 32px; drop-shadow-color: rgba(255, 90, 60, 0.16 * root.breath);
+                        }
+                        mark := Rectangle {
+                            border-radius: 28px; background: #18181b; border-width: 1px; border-color: #26262c;
+                            drop-shadow-blur: 40px; drop-shadow-offset-y: 18px; drop-shadow-color: #00000073;
+                            if !root.failed : Path {
+                                x: 29px; y: 27px; width: 34px; height: 34px; viewbox-width: 24; viewbox-height: 24;
+                                fill: Theme.accent;
+                                commands: "M7 4.8v14.4a1 1 0 0 0 1.5.86l11.6-7.2a1 1 0 0 0 0-1.72L8.5 3.94A1 1 0 0 0 7 4.8z";
+                            }
+                            if root.failed && root.step == 0 : Path {
+                                width: 34px; height: 34px; viewbox-width: 24; viewbox-height: 24;
+                                fill: transparent; stroke: #fca5a5; stroke-width: 2.4px; stroke-line-cap: round;
+                                commands: "M7 11h10a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2zM8 11V8a4 4 0 0 1 8 0v3";
+                            }
+                            if root.failed && root.step > 0 : Path {
+                                width: 34px; height: 34px; viewbox-width: 24; viewbox-height: 24;
+                                fill: transparent; stroke: #fca5a5; stroke-width: 2.4px; stroke-line-cap: round;
+                                commands: "M3 9.5a13 13 0 0 1 18 0M6.5 13a8 8 0 0 1 11 0M10 16.5a3 3 0 0 1 4 0M4 4l16 16";
+                            }
+                        }
+                    }
+                }
+                Rectangle { height: 32px; }
+                head := Text {
+                    horizontal-alignment: center; font-size: 16px; font-weight: 600; color: Theme.strong;
+                    accessible-role: text; accessible-label: self.text;
+                    text: !root.failed
+                        ? (root.step == 0 ? "Reading your browser session…" : root.step == 1 ? "Connecting to YouTube…" : "Loading your feed…")
+                        : (root.step == 0 ? "Couldn't read your browser session" : root.step == 1 ? "Can't reach YouTube" : "Couldn't load your feed");
+                }
+                if !root.failed : HorizontalLayout {
+                    alignment: center; padding-top: 16px;
+                    Rectangle {
+                        width: 168px; height: 3px; border-radius: 2px; background: #1f1f24; clip: true;
+                        accessible-role: progress-indicator; accessible-label: "Starting up";
+                        Rectangle {
+                            // Eased sweep from just off the left edge to past the right edge.
+                            width: parent.width * 0.4; height: parent.height; border-radius: 2px; background: Theme.accent;
+                            x: -self.width + (parent.width + self.width) * root.sweep * root.sweep * (3 - 2 * root.sweep);
+                        }
+                    }
+                }
+                if root.failed : HorizontalLayout {
+                    alignment: center; padding-top: 8px;
+                    detail := Text {
+                        width: min(300px, root.width - 64px);
+                        text: AppState.error; wrap: word-wrap; horizontal-alignment: center;
+                        font-size: 13px; color: Theme.subtle;
+                        accessible-role: text; accessible-label: self.text;
+                    }
+                }
+                if root.failed : HorizontalLayout {
+                    alignment: center; padding-top: 28px; spacing: 10px;
+                    retry := ActionButton { text: "Try again"; primary: true; height: 44px; enabled: !AppState.busy; clicked => { root.retry(); } }
+                    change := ActionButton { text: "Change browser"; outlined: true; height: 44px; clicked => { root.change-browser(); } }
+                }
+                HorizontalLayout {
+                    alignment: center; padding-top: 36px;
+                    VerticalLayout {
+                        min-width: 220px; spacing: 12px;
+                        Step { label: "Reading browser session"; state: root.stage(0); }
+                        Step { label: "Connecting to YouTube"; state: root.stage(1); }
+                        Step { label: "Loading your feed"; state: root.stage(2); }
+                    }
+                }
+            }
+        }
+        HorizontalLayout {
+            alignment: center; spacing: root.failed ? 16px : 10px;
+            if AppState.startup-label != "" : Rectangle {
+                height: 36px; border-radius: 18px; background: Theme.surface;
+                width: min(who.preferred-width, root.width - (root.failed ? 160px : 240px));
+                who := HorizontalLayout {
+                    padding-left: 6px; padding-right: 12px; spacing: 8px;
+                    Rectangle {
+                        y: 6px; width: 24px; height: 24px; border-radius: 12px; background: #26262c;
+                        Text { text: AppState.startup-initial; font-size: 11px; font-weight: 600; color: Theme.text; }
+                    }
+                    Text { text: AppState.startup-label; overflow: elide; font-size: 12.5px; color: Theme.muted; vertical-alignment: center; accessible-role: text; accessible-label: self.text; }
+                }
+            }
+            if !root.failed : footer-change := ActionButton { text: "Change browser"; outlined: true; height: 36px; clicked => { root.change-browser(); } }
+            if root.failed : settings := ActionButton {
+                text: "Settings"; quiet: true; height: 36px;
+                clicked => { AppState.initializing = false; AppState.startup-failed = false; AppState.setup-open = false; AppState.settings-open = true; }
+            }
+
+        }
     }
 }

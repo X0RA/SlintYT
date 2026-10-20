@@ -10,8 +10,9 @@ export component ActionButton inherits Rectangle {
     in property <bool> outlined: false;
     in property <string> tip: root.text;
     in property <length> icon-size: 20px;
+    in property <length> width-limit: 100000px;
     callback clicked();
-    min-width: root.text == "" ? root.height : label.preferred-width + (root.icon == "" ? 32px : 60px);
+    min-width: min(root.width-limit, root.text == "" ? root.height : label.preferred-width + (root.icon == "" ? 32px : 60px));
     preferred-width: self.min-width;
     max-width: self.min-width;
     height: 42px;

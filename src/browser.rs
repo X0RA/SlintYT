@@ -61,12 +61,8 @@ impl Selection {
         }
     }
 
-    pub fn label(&self) -> String {
-        let profile = self
-            .profile
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy();
+    /// The browser's data folder that holds this profile, for grouping in the picker.
+    pub fn root(&self) -> PathBuf {
         let mut root = self.profile.parent().unwrap_or(&self.profile);
         if matches!(
             root.file_name().and_then(|v| v.to_str()),
@@ -74,6 +70,28 @@ impl Selection {
         ) {
             root = root.parent().unwrap_or(root);
         }
+        root.to_path_buf()
+    }
+
+    /// Throwaway profiles made by automation and test tools rather than a person.
+    pub fn temporary(&self) -> bool {
+        self.profile.starts_with(std::env::temp_dir())
+            || self.profile.components().any(|part| {
+                let part = part.as_os_str().to_string_lossy().to_lowercase();
+                part.starts_with("scoped_dir")
+                    || part.contains("headless")
+                    || part.contains("puppeteer")
+                    || part.contains("playwright")
+            })
+    }
+
+    pub fn label(&self) -> String {
+        let profile = self
+            .profile
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy();
+        let root = self.root();
         let app = root.file_name().unwrap_or_default().to_string_lossy();
         let app = app.trim_start_matches('.');
         let name = match app {
@@ -95,6 +113,52 @@ impl Selection {
         };
         format!("{name} · {profile}")
     }
+}
+
+/// Best guess at the browser that owns a profile folder entered by hand.
+/// Chromium forks differ in where they keep their cookie password, so known
+/// folder names are matched before falling back to plain Chromium.
+pub fn infer(path: &Path) -> &'static str {
+    if path.extension().is_some_and(|e| e == "binarycookies") {
+        return "safari";
+    }
+    if path.join("cookies.sqlite").is_file() {
+        return "firefox";
+    }
+    let text = path.to_string_lossy().to_lowercase().replace('\\', "/");
+    for (needle, browser) in [
+        ("bravesoftware", "brave"),
+        ("google-chrome", "chrome"),
+        ("google/chrome", "chrome"),
+        ("microsoft-edge", "edge"),
+        ("microsoft/edge", "edge"),
+        ("microsoft edge", "edge"),
+        ("opera", "opera"),
+        ("vivaldi", "vivaldi"),
+        ("whale", "whale"),
+        ("mozilla", "firefox"),
+        ("librewolf", "firefox"),
+    ] {
+        if text.contains(needle) {
+            return browser;
+        }
+    }
+    "chromium"
+}
+
+/// Accept the home-relative paths shown in the picker without involving a shell.
+pub fn profile_path(input: &str) -> Result<PathBuf> {
+    let input = input.trim();
+    let path = if input == "~" || input.starts_with("~/") || input.starts_with("~\\") {
+        let home = BaseDirs::new().context("Could not locate your home folder.")?;
+        home.home_dir().join(input.get(2..).unwrap_or_default())
+    } else {
+        PathBuf::from(input)
+    };
+    if !path.is_absolute() || input.chars().any(char::is_control) || input.contains("::") {
+        bail!("Enter an absolute profile path, or a path starting with ~/.");
+    }
+    Ok(path)
 }
 
 pub struct Discovery {
@@ -374,6 +438,40 @@ fn scan(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manual_paths_expand_home_and_reject_invalid_input() {
+        let home = BaseDirs::new().unwrap();
+        assert_eq!(profile_path("~").unwrap(), home.home_dir());
+        assert_eq!(
+            profile_path(" ~/browser/Profile 2 ").unwrap(),
+            home.home_dir().join("browser/Profile 2")
+        );
+        let folder = tempfile::tempdir().unwrap();
+        assert_eq!(
+            profile_path(&folder.path().display().to_string()).unwrap(),
+            folder.path()
+        );
+        for input in ["", "relative/profile", "~/profile\nname", "~/profile::name"] {
+            assert!(profile_path(input).is_err(), "{input:?}");
+        }
+    }
+
+    #[test]
+    fn manual_browser_inference_recognizes_profile_signatures_and_forks() {
+        let folder = tempfile::tempdir().unwrap();
+        file(folder.path(), "cookies.sqlite");
+        assert_eq!(infer(folder.path()), "firefox");
+        for (path, browser) in [
+            ("BraveSoftware/Brave-Browser/Default", "brave"),
+            ("Google/Chrome/Profile 2", "chrome"),
+            ("Microsoft/Edge/Default", "edge"),
+            ("net.imput.helium/Default", "chromium"),
+            ("Cookies.binarycookies", "safari"),
+        ] {
+            assert_eq!(infer(Path::new(path)), browser);
+        }
+    }
 
     fn file(root: &Path, name: &str) {
         let path = root.join(name);

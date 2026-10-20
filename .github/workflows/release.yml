@@ -1,11 +1,22 @@
 name: Release
 
 # No upstream URL is hardcoded here; GitHub supplies github.repository.
-# Publish intentionally with a vX.Y.Z tag, or dispatch from the commit to release.
+# Main pushes (including merges) automatically tag and release a new version.
 on:
   push:
+    branches: [main]
     tags: ['v*']
+    paths-ignore:
+      - '**/*.md'
+      - '.gitignore'
+      - 'Makefile'
+      - 'scripts/install-*.sh'
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Override version (plain, e.g. 1.0.0). Blank = auto-bump."
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -23,32 +34,57 @@ env:
 jobs:
   version:
     name: Resolve version
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.resolve.outputs.version }}
       tag: ${{ steps.resolve.outputs.tag }}
+      changelog: ${{ steps.bump.outputs.changelog }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
-      - name: Resolve version from Cargo.toml
+      - name: Bump version (auto-bump path only)
+        id: bump
+        if: >-
+          (github.event_name == 'push' && github.ref == 'refs/heads/main')
+          || (github.event_name == 'workflow_dispatch' && inputs.version == '')
+        uses: mathieudutour/github-tag-action@v6.2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          default_bump: patch
+          tag_prefix: v
+
+      - name: Resolve final version and tag
         id: resolve
         env:
+          BUMP_VERSION: ${{ steps.bump.outputs.new_version }}
+          BUMP_TAG: ${{ steps.bump.outputs.new_tag }}
+          INPUT_VERSION: ${{ inputs.version }}
           EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
           REF_NAME: ${{ github.ref_name }}
         run: |
-          python3 - <<'PYTHON'
-          import os, re, tomllib
-          with open("Cargo.toml", "rb") as manifest:
-              version = tomllib.load(manifest)["package"]["version"]
-          if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
-              raise SystemExit("Release version must be X.Y.Z")
-          tag = "v" + version
-          if os.environ["EVENT_NAME"] == "push" and os.environ["REF_NAME"] != tag:
-              raise SystemExit("Release tag must match Cargo.toml")
-          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-              output.write(f"version={version}\ntag={tag}\n")
-          PYTHON
+          set -euo pipefail
+          if [ "${EVENT_NAME}" = "push" ] && [[ "${REF}" == refs/tags/v* ]]; then
+            TAG="${REF_NAME}"
+            VERSION="${TAG#v}"
+          elif [ -n "${INPUT_VERSION}" ]; then
+            VERSION="${INPUT_VERSION}"
+            TAG="v${INPUT_VERSION}"
+          else
+            VERSION="${BUMP_VERSION}"
+            TAG="${BUMP_TAG}"
+          fi
+          if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || [ "${TAG}" != "v${VERSION}" ]; then
+            echo "Expected a release version X.Y.Z and matching vX.Y.Z tag." >&2
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
   build-linux:
     name: Build Linux
@@ -354,11 +390,18 @@ jobs:
           TAG: ${{ needs.version.outputs.tag }}
           VERSION: ${{ needs.version.outputs.version }}
           COMMIT: ${{ github.sha }}
+          CHANGELOG: ${{ needs.version.outputs.changelog }}
         run: |
           set -euo pipefail
           (cd release-assets && sha256sum -- * > SHA256SUMS)
           if gh release view "${TAG}" >/dev/null 2>&1; then
             gh release upload "${TAG}" release-assets/* --clobber
+          elif [ -n "${CHANGELOG}" ]; then
+            printf '%s\n' "${CHANGELOG}" > "${RUNNER_TEMP}/slintyt-release-notes.md"
+            gh release create "${TAG}" release-assets/* \
+              --title "${VERSION}" \
+              --target "${COMMIT}" \
+              --notes-file "${RUNNER_TEMP}/slintyt-release-notes.md"
           else
             gh release create "${TAG}" release-assets/* \
               --title "${VERSION}" \

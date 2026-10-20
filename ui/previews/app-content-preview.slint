@@ -27,7 +27,7 @@ export component AppWindow inherits Window {
         AppState.watch-note = "Using cached watch history · 1273 watched videos. Refreshing recent watches…";
         AppState.sections = [{ start: 0, count: 3 }, { start: 3, count: 1 }];
         AppState.has-more = true;
-        AppState.profiles = [{ label: "chromium · Example · Default", path: "/example/.config/browser/Default" }];
+        AppState.profiles = [{ label: "Chromium · Default", name: "Default", path: "/example/.config/chromium/Default", group: "Chromium", root: "~/.config/chromium", initials: "C", tone: #2e414e, first: true }];
     }
     VerticalLayout {
         HorizontalLayout {

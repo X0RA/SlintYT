@@ -1,4 +1,6 @@
-export struct BrowserProfile { label: string, path: string, name: string, avatar: string, initials: string }
+// Discovered profiles arrive grouped by browser: `first` starts a group, whose
+// header uses `group`, `initials`, `tone` and `root`. Saved profiles leave these empty.
+export struct BrowserProfile { label: string, path: string, name: string, avatar: string, initials: string, group: string, root: string, tone: color, first: bool, temporary: bool }
 export struct VideoData {
     id: string, title: string, channel: string, metadata: string,
     duration: string, thumbnail: image, playlist: bool, watched: int, watch-progress: int,
@@ -35,6 +37,19 @@ export global AppState {
     in-out property <string> error;
     in-out property <string> scan-warning;
     in-out property <[BrowserProfile]> profiles;
+    // Picker row preselected by Rust (the profile in use), or -1.
+    in-out property <int> selected-profile: -1;
+    in-out property <int> temporary-profiles;
+    in-out property <string> manual-profile-path;
+    in-out property <bool> profile-dialog-open;
+    callback browse-profile-folder();
+    // Start-up splash: 0 reading the browser session, 1 connecting to YouTube, 2 loading the feed.
+    in-out property <int> startup-step;
+    in-out property <bool> startup-failed;
+    in-out property <string> startup-label;
+    in-out property <string> startup-initial;
+    callback retry-startup();
+    callback change-browser();
     in-out property <[BrowserProfile]> saved-profiles;
     in-out property <int> active-profile: -1;
     callback switch-profile(int);

@@ -1,0 +1,20 @@
+import { ActionButton } from "../components/action-button.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData } from "../state.slint";
+export component AppWindow inherits Window {
+    title: "Button preview";
+    width: 720px; height: 200px; background: #0f0f0f;
+    VerticalLayout { padding: 20px; spacing: 16px;
+        HorizontalLayout { spacing: 12px; alignment: start;
+            ActionButton { text: "Use this profile"; primary: true; }
+            ActionButton { text: "History"; active: true; }
+            ActionButton { text: "Refresh"; enabled: false; }
+        }
+        HorizontalLayout { spacing: 10px; alignment: start;
+            ActionButton { height: 48px; text: "Play all"; icon: "play"; icon-size: 16px; primary: true; }
+            ActionButton { height: 48px; icon: "shuffle"; tip: "Shuffle"; outlined: true; }
+            ActionButton { height: 48px; icon: "link"; tip: "Copy link"; outlined: true; }
+            ActionButton { height: 40px; icon-size: 18px; icon: "like"; text: "Like"; }
+            ActionButton { height: 36px; icon-size: 16px; icon: "down"; text: "16 replies"; quiet: true; }
+        }
+    }
+}

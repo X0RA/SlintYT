@@ -1,0 +1,21 @@
+import { Icon } from "../components/icon.slint";
+import { AppState } from "../state.slint";
+import { Palette, ScrollView } from "std-widgets.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData } from "../state.slint";
+export component AppWindow inherits Window {
+    title: "icon preview"; preferred-width: 1100px; height: 760px; min-width: 480px; background: #0e0e10;
+    init => {
+        Palette.color-scheme = ColorScheme.dark;
+        AppState.initializing = false;
+        AppState.channel-name = "Linus Tech Tips"; AppState.channel-initials = "LT";
+        AppState.channel-meta = "@LinusTechTips · 16.2M subscribers · 7.4K videos";
+        AppState.channel-description = "We make entertaining videos about technology. This mock description covers long text and expansion without relying on a live service.";
+        AppState.channel-banner = @image-url("mock-thumbnail.svg");
+        AppState.player-channel = "Linus Tech Tips"; AppState.player-channel-initials = "LT";
+        AppState.player-stats = "1.2M views · 2 days ago";
+        AppState.player-description = "This is a standalone video details preview.\nA longer description can expand and collapse.\nA third line of mock text.\nMore text to inspect the expanded state.";
+        AppState.comments = [{id:"mock",author:"@viewer",initials:"V",text:"A thoughtful comment with enough text to test wrapping across the available width.",metadata:"2 hours ago",likes:"42",replies:3}];
+        AppState.recommendations = [{id:"abcdefghijk",title:"A recommended video",channel:"Workshop",initials:"W",metadata:"12K views · 1 day ago",duration:"12:34",thumbnail:@image-url("mock-thumbnail.svg")}];
+    }
+    HorizontalLayout { alignment: center; spacing: 20px; for name in ["home","subscriptions","history","playlist","settings","play","subtitles","fullscreen"] : Icon { name: name; } }
+}

@@ -1,0 +1,367 @@
+name: Release
+
+# No upstream URL is hardcoded here; GitHub supplies github.repository.
+# Publish intentionally with a vX.Y.Z tag, or dispatch from the commit to release.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  APP_BIN: slintyt
+  APP_NAME: SlintYT
+  APP_BUNDLE_ID: io.github.placeholder.slintyt
+
+jobs:
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Resolve version from Cargo.toml
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PYTHON'
+          import os, re, tomllib
+          with open("Cargo.toml", "rb") as manifest:
+              version = tomllib.load(manifest)["package"]["version"]
+          if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
+              raise SystemExit("Release version must be X.Y.Z")
+          tag = "v" + version
+          if os.environ["EVENT_NAME"] == "push" and os.environ["REF_NAME"] != tag:
+              raise SystemExit("Release tag must match Cargo.toml")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"version={version}\ntag={tag}\n")
+          PYTHON
+
+  build-linux:
+    name: Build Linux
+    needs: version
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang \
+            cmake \
+            pkg-config \
+            libdbus-1-dev \
+            libudev-dev \
+            libfontconfig-dev \
+            libgl1-mesa-dev \
+            libmpv-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxkbcommon-dev \
+            libxrandr-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: slintyt-v1
+          shared-key: linux-release
+          cache-on-failure: true
+          cache-bin: false
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Stage Linux binary
+        run: |
+          mkdir -p dist
+          cp "target/release/${APP_BIN}" "dist/${APP_BIN}-linux-x86_64"
+          chmod +x "dist/${APP_BIN}-linux-x86_64"
+          cp scripts/installer/slintyt.desktop dist/slintyt.desktop
+          cp ui/assets/appicon.png dist/slintyt.png
+          cp ui/assets/appicon.svg dist/slintyt.svg
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-release
+          path: |
+            dist/${{ env.APP_BIN }}-linux-x86_64
+            dist/slintyt.desktop
+            dist/slintyt.png
+            dist/slintyt.svg
+          if-no-files-found: error
+
+  build-windows:
+    name: Build Windows
+    needs: version
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install mpv development files
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ./scripts/powershell/setup-deps.ps1
+          $mpvDir = Join-Path $env:GITHUB_WORKSPACE "deps"
+          "LIB=$mpvDir;$env:LIB" >> $env:GITHUB_ENV
+          "MPV_DEV_DIR=$mpvDir" >> $env:GITHUB_ENV
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: slintyt-v1
+          shared-key: windows-release
+          cache-on-failure: true
+          cache-bin: false
+
+      - name: Build release executable
+        run: cargo build --release --locked
+
+      - name: Stage Windows executable
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "target\release\${env:APP_BIN}.exe" "dist\${env:APP_BIN}.exe"
+          $dll = Get-ChildItem $env:MPV_DEV_DIR -Filter "libmpv-2.dll" | Select-Object -First 1
+          if (-not $dll) { throw "libmpv-2.dll missing" }
+          Copy-Item $dll.FullName "dist\libmpv-2.dll"
+          Copy-Item ui/assets/appicon.ico dist/appicon.ico
+          Copy-Item scripts/installer/windows-readme.txt dist/README.txt
+          Compress-Archive -Path dist/slintyt.exe,dist/libmpv-2.dll,dist/appicon.ico,dist/README.txt -DestinationPath dist/slintyt-windows-x86_64.zip
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Build Windows installer
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: .\scripts\powershell\build-installer.ps1 -Version $env:VERSION -BuildDir dist
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-release
+          path: |
+            dist/${{ env.APP_BIN }}-windows-x86_64.zip
+            dist/SlintYT-${{ needs.version.outputs.version }}-Setup.exe
+          if-no-files-found: error
+
+  build-macos:
+    name: Build macOS
+    needs: version
+    runs-on: macos-14
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install macOS build dependencies
+        run: brew install mpv dylibbundler imagemagick
+
+      - name: Configure Homebrew library path
+        run: |
+          echo "LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
+          echo "MACOSX_DEPLOYMENT_TARGET=14.0" >> "$GITHUB_ENV"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: slintyt-v1
+          shared-key: macos-arm64-release
+          cache-on-failure: true
+          cache-bin: false
+
+      - name: Build macOS release target
+        run: cargo build --release --locked --target aarch64-apple-darwin
+
+      - name: Build macOS .icns from app icon
+        run: |
+          set -euo pipefail
+          # Rasterize the vector at 1024px so Retina icons stay sharp.
+          APPICON="$RUNNER_TEMP/appicon.png"
+          magick -background none -density 384 ui/assets/appicon.svg -resize 1024x1024 "$APPICON"
+          ICONSET="${RUNNER_TEMP}/SlintYT.iconset"
+          mkdir -p "${ICONSET}"
+          sips -z 16 16     "${APPICON}" --out "${ICONSET}/icon_16x16.png"
+          sips -z 32 32     "${APPICON}" --out "${ICONSET}/icon_16x16@2x.png"
+          sips -z 32 32     "${APPICON}" --out "${ICONSET}/icon_32x32.png"
+          sips -z 64 64     "${APPICON}" --out "${ICONSET}/icon_32x32@2x.png"
+          sips -z 128 128   "${APPICON}" --out "${ICONSET}/icon_128x128.png"
+          sips -z 256 256   "${APPICON}" --out "${ICONSET}/icon_128x128@2x.png"
+          sips -z 256 256   "${APPICON}" --out "${ICONSET}/icon_256x256.png"
+          sips -z 512 512   "${APPICON}" --out "${ICONSET}/icon_256x256@2x.png"
+          sips -z 512 512   "${APPICON}" --out "${ICONSET}/icon_512x512.png"
+          sips -z 1024 1024 "${APPICON}" --out "${ICONSET}/icon_512x512@2x.png"
+          mkdir -p ui/assets
+          iconutil -c icns "${ICONSET}" -o "ui/assets/logo.icns"
+
+      - name: Assemble macOS app
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          APP_DIR="dist/app/${APP_NAME}.app"
+          mkdir -p "${APP_DIR}/Contents/MacOS"
+          mkdir -p "${APP_DIR}/Contents/Resources"
+          mkdir -p "${APP_DIR}/Contents/Frameworks"
+          cp "target/aarch64-apple-darwin/release/${APP_BIN}" "${APP_DIR}/Contents/MacOS/${APP_BIN}"
+          chmod +x "${APP_DIR}/Contents/MacOS/${APP_BIN}"
+          cat > "${APP_DIR}/Contents/MacOS/launch" <<'LAUNCH'
+          #!/bin/sh
+          export PATH="${PATH}:/opt/homebrew/bin:/usr/local/bin"
+          exec "$(dirname "$0")/slintyt" "$@"
+          LAUNCH
+          chmod +x "${APP_DIR}/Contents/MacOS/launch"
+          if [ -f "ui/assets/logo.icns" ]; then
+            cp "ui/assets/logo.icns" "${APP_DIR}/Contents/Resources/${APP_NAME}.icns"
+          fi
+
+      - name: Bundle dynamic libraries into app
+        run: |
+          APP_DIR="dist/app/${APP_NAME}.app"
+          dylibbundler \
+            --overwrite-files \
+            --bundle-deps \
+            --fix-file "${APP_DIR}/Contents/MacOS/${APP_BIN}" \
+            --dest-dir "${APP_DIR}/Contents/Frameworks/" \
+            --install-path "@executable_path/../Frameworks/"
+
+      - name: Create macOS app metadata
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          APP_DIR="dist/app/${APP_NAME}.app"
+          ICON_KEY=""
+          if [ -f "${APP_DIR}/Contents/Resources/${APP_NAME}.icns" ]; then
+            ICON_KEY="<key>CFBundleIconFile</key><string>${APP_NAME}</string>"
+          fi
+          cat > "${APP_DIR}/Contents/Info.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleDevelopmentRegion</key>
+            <string>en</string>
+            <key>CFBundleDisplayName</key>
+            <string>${APP_NAME}</string>
+            <key>CFBundleExecutable</key>
+            <string>launch</string>
+            <key>CFBundleIdentifier</key>
+            <string>${APP_BUNDLE_ID}</string>
+            <key>CFBundleInfoDictionaryVersion</key>
+            <string>6.0</string>
+            <key>CFBundleName</key>
+            <string>${APP_NAME}</string>
+            ${ICON_KEY}
+            <key>CFBundlePackageType</key>
+            <string>APPL</string>
+            <key>CFBundleShortVersionString</key>
+            <string>${VERSION}</string>
+            <key>CFBundleVersion</key>
+            <string>${VERSION}</string>
+            <key>LSMinimumSystemVersion</key>
+            <string>14.0</string>
+            <key>NSHighResolutionCapable</key>
+            <true/>
+            <key>NSPrincipalClass</key>
+            <string>NSApplication</string>
+          </dict>
+          </plist>
+          EOF
+
+      - name: Validate and ad-hoc sign macOS app
+        run: |
+          APP_DIR="dist/app/${APP_NAME}.app"
+          plutil -lint "${APP_DIR}/Contents/Info.plist"
+          test -x "${APP_DIR}/Contents/MacOS/${APP_BIN}"
+          codesign --force --deep --sign - "${APP_DIR}"
+          codesign --verify --deep --strict --verbose=2 "${APP_DIR}"
+
+      - name: Create macOS DMG
+        run: |
+          hdiutil create \
+            -volname "${APP_NAME}" \
+            -srcfolder "dist/app" \
+            -ov \
+            -format UDZO \
+            "dist/${APP_BIN}-macos-arm64.dmg"
+
+      - name: Upload macOS DMG artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-release
+          path: dist/${{ env.APP_BIN }}-macos-arm64.dmg
+          if-no-files-found: error
+
+  publish-release:
+    permissions:
+      contents: write
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs:
+      - version
+      - build-linux
+      - build-windows
+      - build-macos
+
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          (cd release-assets && sha256sum -- * > SHA256SUMS)
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" release-assets/* --clobber
+          else
+            gh release create "${TAG}" release-assets/* \
+              --title "${VERSION}" \
+              --target "${COMMIT}" \
+              --generate-notes
+          fi

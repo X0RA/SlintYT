@@ -1,0 +1,15 @@
+import { Spinner } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+
+export component AppLoading inherits Rectangle {
+    in property <string> message: "Loading your YouTube…";
+    background: Theme.background;
+    VerticalLayout {
+        alignment: center;
+        padding: 48px;
+        spacing: 18px;
+        Text { text: "SlintYT"; color: Theme.text; font-size: 30px; font-weight: 700; horizontal-alignment: center; }
+        HorizontalLayout { alignment: center; Spinner { width: 32px; height: 32px; } }
+        Text { text: root.message; color: Theme.muted; font-size: 14px; wrap: word-wrap; horizontal-alignment: center; }
+    }
+}

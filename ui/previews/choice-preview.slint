@@ -1,0 +1,16 @@
+import { Choice } from "../components/choice.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData } from "../state.slint";
+export component AppWindow inherits Window {
+    title: "Choice preview";
+    width: 520px; height: 360px; background: #0e0e10;
+    private property <string> last;
+    VerticalLayout {
+        padding: 24px; spacing: 16px; alignment: start;
+        HorizontalLayout { alignment: start; spacing: 12px;
+            Choice { label: "Quality"; options: ["1080p", "Best available", "2160p", "1440p", "720p"]; selected(i) => { root.last = "quality " + i; } }
+            Choice { label: "Buffer"; options: ["Normal · 150 MB", "Small · 50 MB", "Large · 500 MB"]; }
+        }
+        Choice { label: "Single"; options: ["Only option"]; }
+        Text { text: root.last == "" ? "Pick an option" : "Selected " + root.last; color: white; }
+    }
+}

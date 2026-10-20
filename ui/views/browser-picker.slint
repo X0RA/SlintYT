@@ -1,0 +1,90 @@
+import { CheckBox, ComboBox, LineEdit, ListView } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { AppState } from "../state.slint";
+import { ActionButton } from "../components/action-button.slint";
+
+export component BrowserPicker inherits Rectangle {
+    private property <int> selected: -1;
+    private property <bool> manual: false;
+    private property <string> manual-path;
+    private property <int> keyring-index: 0;
+    background: Theme.surface;
+    border-radius: Theme.radius;
+    border-width: 1px;
+    border-color: Theme.border;
+    VerticalLayout {
+        padding: 28px;
+        spacing: 14px;
+        Text { text: "Your YouTube, in SlintYT"; color: Theme.text; font-size: 26px; font-weight: 700; }
+        Text { text: "Choose the browser profile where you’re signed in to YouTube."; color: Theme.muted; font-size: 14px; wrap: word-wrap; }
+        Text { text: "Use this profile reads its YouTube cookies to load your recommendations and watch history. Your browser may ask to unlock its keyring."; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
+        if AppState.scan-warning != "" : Text { text: AppState.scan-warning; color: #e8ba72; wrap: word-wrap; font-size: 12px; }
+        HorizontalLayout {
+            Text { text: "BROWSER PROFILES"; color: Theme.muted; font-size: 11px; font-weight: 600; vertical-alignment: center; }
+            Rectangle { horizontal-stretch: 1; background: transparent; }
+            rescan := ActionButton { text: "Scan again"; enabled: !AppState.busy; clicked => { root.selected = -1; AppState.scan-profiles(); } }
+        }
+        if AppState.profiles.length > 0 && !root.manual : ListView {
+            min-height: 130px;
+            preferred-height: 210px;
+            for profile[index] in AppState.profiles : Rectangle {
+                height: 76px;
+                border-radius: 8px;
+                border-width: 1px;
+                border-color: root.selected == index || profile-focus.has-focus ? Theme.accent : Theme.border;
+                background: root.selected == index ? #302020 : profile-touch.has-hover ? Theme.raised : Theme.surface;
+                accessible-role: button;
+                accessible-label: profile.label + " " + profile.path;
+                accessible-enabled: !AppState.busy;
+                accessible-action-default => { if !AppState.busy { root.selected = index; } }
+                HorizontalLayout {
+                    padding: 14px;
+                    spacing: 12px;
+                    Text { width: 18px; text: root.selected == index ? "●" : "○"; color: root.selected == index ? Theme.accent : Theme.muted; vertical-alignment: center; }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 5px;
+                        Text { text: profile.label; color: Theme.text; font-size: 14px; overflow: elide; }
+                        Text { text: profile.path; color: Theme.muted; font-size: 11px; overflow: elide; }
+                    }
+                }
+                profile-focus := FocusScope {
+                    key-pressed(event) => { if event.text == " " || event.text == "\n" { root.selected = index; return accept; } return reject; }
+                }
+                profile-touch := TouchArea { enabled: !AppState.busy; mouse-cursor: pointer; clicked => { profile-focus.focus(); root.selected = index; } }
+            }
+        }
+        if AppState.profiles.length == 0 && !root.manual : Text {
+            text: AppState.busy ? "Looking for browser profiles…" : "No browser profiles found. You can scan again or enter a profile path below.";
+            color: Theme.muted;
+            wrap: word-wrap;
+            min-height: 70px;
+        }
+        CheckBox { text: "Enter a profile path manually"; checked <=> root.manual; enabled: !AppState.busy; }
+        if root.manual : HorizontalLayout {
+            spacing: 12px;
+            browser := ComboBox { model: ["brave", "chrome", "chromium", "edge", "firefox", "opera", "safari", "vivaldi", "whale"]; current-index: 2; enabled: !AppState.busy; }
+            LineEdit { text <=> root.manual-path; placeholder-text: "Absolute profile path (Safari: cookie file)"; enabled: !AppState.busy; }
+            manual-connect := ActionButton { text: "Use profile"; primary: true; enabled: !AppState.busy && root.manual-path != ""; clicked => { AppState.connect-manual(browser.current-value, root.manual-path, root.keyring-index); } }
+        }
+        HorizontalLayout {
+            spacing: 12px;
+            Text { text: "Chromium keyring"; color: Theme.muted; font-size: 12px; vertical-alignment: center; }
+            ComboBox { model: ["Automatic (browser flags)", "GNOME keyring", "KWallet 6", "KWallet 5", "KWallet", "Basic text"]; current-index <=> root.keyring-index; enabled: !AppState.busy; }
+        }
+        if AppState.error != "" : Text { text: AppState.error; color: #ffaaa5; wrap: word-wrap; font-size: 13px; }
+        if AppState.status != "" : Text { text: AppState.status; color: Theme.muted; wrap: word-wrap; font-size: 13px; }
+        Text { text: "SlintYT remembers your browser and profile. Cookies stay out of your settings file."; color: Theme.muted; wrap: word-wrap; font-size: 12px; }
+        HorizontalLayout {
+            spacing: 12px;
+            if AppState.connected : ActionButton { text: "Back"; enabled: !AppState.busy; clicked => { AppState.setup-open = false; AppState.error = ""; AppState.status = ""; } }
+            Rectangle { horizontal-stretch: 1; background: transparent; }
+            if !root.manual : use-profile := ActionButton {
+                text: AppState.busy ? "Please wait…" : "Use this profile";
+                primary: true;
+                enabled: !AppState.busy && root.selected >= 0 && root.selected < AppState.profiles.length;
+                clicked => { AppState.connect-profile(root.selected, root.keyring-index); }
+            }
+        }
+    }
+}

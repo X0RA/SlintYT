@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint-and-test:
+    name: Lint & Test (Linux)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            desktop-file-utils \
+            shellcheck \
+            clang \
+            cmake \
+            pkg-config \
+            libdbus-1-dev \
+            libudev-dev \
+            libfontconfig-dev \
+            libgl1-mesa-dev \
+            libmpv-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxkbcommon-dev \
+            libxrandr-dev
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: slintyt-v1
+          shared-key: linux-release
+          cache-on-failure: true
+          cache-bin: false
+
+      - name: Check packaging
+        run: |
+          bash -n scripts/install-linux.sh scripts/install-macos.sh
+          shellcheck scripts/install-linux.sh scripts/install-macos.sh
+          desktop-file-validate scripts/installer/slintyt.desktop
+          test -s ui/assets/appicon.png
+          test -s ui/assets/appicon.svg
+          test -s ui/assets/appicon.ico
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --release --locked
+
+      - name: Check Linux install and uninstall
+        run: |
+          cargo build --release --locked
+          stage="$(mktemp -d)"
+          make install DESTDIR="$stage" PREFIX=/usr
+          desktop-file-validate "$stage/usr/share/applications/slintyt.desktop"
+          cmp target/release/slintyt "$stage/usr/bin/slintyt"
+          make uninstall DESTDIR="$stage" PREFIX=/usr
+          test -z "$(find "$stage" -type f -print -quit)"

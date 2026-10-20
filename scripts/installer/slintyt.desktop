@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=SlintYT
+Comment=Browse YouTube and watch videos with mpv
+Exec=slintyt
+Icon=slintyt
+Terminal=false
+StartupWMClass=slintyt
+Categories=AudioVideo;Video;Player;
+Keywords=YouTube;mpv;video;streaming;

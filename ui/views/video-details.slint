@@ -1,0 +1,128 @@
+import { Spinner, ScrollView } from "std-widgets.slint";
+import { PillInput } from "../components/pill-input.slint";
+import { MenuItem, MenuSurface } from "../components/menu-item.slint";
+import { Theme } from "../theme.slint";
+import { AppState } from "../state.slint";
+import { ActionButton } from "../components/action-button.slint";
+import { Avatar } from "../components/avatar.slint";
+import { VideoCard } from "../components/video-card.slint";
+export component VideoDetails inherits Rectangle {
+    private property <bool> expanded: false;
+    private property <bool> save-open: false;
+    private property <string> reply-id;
+    private property <int> columns: max(1, min(4, floor((root.width + 20px) / 310px)));
+    min-width: 0px;
+    min-height: layout.preferred-height;
+    background: Theme.background;
+    private property <int> dismissal: AppState.dismiss-popovers;
+    changed dismissal => { root.save-open = false; }
+    details-keys := FocusScope {
+    layout := VerticalLayout {
+        padding: root.width < 700px ? 16px : 36px; spacing: 24px;
+        if AppState.details-loading : Text { text: "Loading video details…"; color: Theme.muted; }
+        if AppState.details-error != "" : HorizontalLayout {
+            Text { text: AppState.details-error; color: #ffaaa5; wrap: word-wrap; }
+            ActionButton { text: "Retry"; clicked => { AppState.load-video-details(AppState.player-video-id); } }
+        }
+        HorizontalLayout { spacing: 14px; cross-axis-alignment: center;
+            Avatar { label: "Open channel " + AppState.player-channel; clickable: AppState.player-channel-id != ""; width: 44px; initials: AppState.player-channel-initials; tone: AppState.player-channel-tone; url: AppState.player-channel-avatar; clicked => { AppState.open-channel(AppState.player-channel-id,0,0,""); } }
+            VerticalLayout { alignment: center; spacing: 2px; horizontal-stretch: root.width > 850px ? 0 : 1;
+                Rectangle { height: 22px; min-width: min(channel-name.preferred-width, 260px);
+                    channel-name := Text { x: 0px; width: parent.width; text: AppState.player-channel; color: name-touch.has-hover ? white : Theme.text; font-size: 15px; font-weight: 600; vertical-alignment: center; overflow: elide; }
+                    name-touch := TouchArea { mouse-cursor: pointer; clicked => { AppState.open-channel(AppState.player-channel-id,0,0,""); } }
+                }
+                Text { text: AppState.player-stats; color: Theme.subtle; font-size: 13px; overflow: elide; }
+            }
+            ActionButton { height: 36px; text: AppState.player-subscribed ? "Subscribed" : "Subscribe"; primary: !AppState.player-subscribed; active: AppState.player-subscribed; enabled: AppState.player-channel-id != "" && !AppState.action-busy; clicked => { AppState.toggle-subscription(AppState.player-channel-id,!AppState.player-subscribed); } }
+            Rectangle { horizontal-stretch: 1; }
+            ActionButton { height: 40px; icon-size: 18px; tip: "Like"; icon: "like"; text: root.width > 700px ? "Like" : ""; active: AppState.player-liked; enabled: !AppState.action-busy; clicked => { AppState.toggle-like(); } }
+            ActionButton { height: 40px; icon-size: 18px; tip: "Save"; icon: "save"; text: root.width > 700px ? "Save" : ""; active: root.save-open; clicked => { root.save-open = !root.save-open; } }
+            ActionButton { height: 40px; icon-size: 18px; tip: "Copy link"; icon: "link"; text: root.width > 700px ? "Copy link" : ""; clicked => { AppState.copy-link("https://www.youtube.com/watch?v=" + AppState.player-video-id); } }
+        }
+        Rectangle {
+            background: Theme.surface; border-radius: 14px;
+            VerticalLayout { padding-left: 18px; padding-right: 18px; padding-top: 16px; padding-bottom: 10px; spacing: 6px;
+                description := StyledText { text: AppState.player-description == "" ? @markdown("No description available.") : AppState.player-rich-description; default-color: #c4c4cc; default-font-size: 14px; link-color: #88b4ee; max-lines: root.expanded ? 0 : 3; height: root.expanded ? self.preferred-height : min(self.preferred-height, 64px); link-clicked(url) => { AppState.follow-video-link(url); } }
+                HorizontalLayout { alignment: start;
+                    Rectangle { width: more-label.preferred-width; height: 32px;
+                        accessible-role: button; accessible-label: more-label.text; accessible-action-default => { root.expanded = !root.expanded; }
+                        more-label := Text { x: 0px; text: root.expanded ? "Show less" : "Show more"; color: more-touch.has-hover ? white : Theme.text; font-size: 13px; font-weight: 600; vertical-alignment: center; }
+                        more-touch := TouchArea { mouse-cursor: pointer; clicked => { root.expanded = !root.expanded; } }
+                    }
+                }
+            }
+        }
+        HorizontalLayout { spacing: 10px; alignment: start;
+            ActionButton { text: "Up next"; quiet: true; active: AppState.player-detail-tab == 0; clicked => { root.save-open = false; AppState.player-detail-tab = 0; } }
+            ActionButton { text: "Comments" + (AppState.comments.length > 0 ? " · " + AppState.comments.length : ""); quiet: true; active: AppState.player-detail-tab == 1; clicked => { root.save-open = false; AppState.player-detail-tab = 1; } }
+        }
+        Rectangle { height: 1px; background: Theme.border; }
+        if AppState.player-detail-tab == 0 : VerticalLayout { spacing: 20px;
+            for row in ceil(AppState.recommendations.length / root.columns) : HorizontalLayout { spacing: 20px;
+                for col in root.columns : VideoCard {
+                    private property <int> index: row * root.columns + col;
+                    width: (root.width - (root.width < 700px ? 32px : 72px) - 20px * (root.columns - 1)) / root.columns;
+                    visible: self.index < AppState.recommendations.length;
+                    video: AppState.recommendations[self.index];
+                    play-video(id,title) => { AppState.play-video(id,title); }
+                    open-playlist(id) => { AppState.open-playlist(id); }
+                }
+            }
+            if !AppState.details-loading && AppState.recommendations.length == 0 : Text { text: "No recommendations available."; color: Theme.subtle; }
+        }
+        if AppState.player-detail-tab == 1 : VerticalLayout { spacing: 20px;
+            HorizontalLayout { alignment: start; spacing: 8px;
+                ActionButton { text: "Top"; active: !AppState.comments-newest; quiet: true; enabled: !AppState.comments-loading && !AppState.details-loading; clicked => { AppState.load-comments(false,false); } }
+                ActionButton { text: "Newest"; active: AppState.comments-newest; quiet: true; enabled: !AppState.comments-loading && !AppState.details-loading; clicked => { AppState.load-comments(true,false); } }
+            }
+            HorizontalLayout { spacing: 12px; cross-axis-alignment: center; padding-bottom: 4px;
+                Avatar { width: 36px; initials: AppState.account-initial; tone: #26262c; url: AppState.account-avatar; }
+                PillInput { horizontal-stretch: 1; height: 44px; enabled: !AppState.details-loading && AppState.details-error == "" && !AppState.action-busy; text <=> AppState.comment-draft; placeholder: "Add a comment…"; accepted(text) => { AppState.submit-comment(text,""); } }
+            }
+            if AppState.comments-error != "" : HorizontalLayout { Text { text: AppState.comments-error; color: #ffaaa5; } ActionButton { text: "Retry"; clicked => { AppState.load-comments(AppState.comments-newest,false); } } }
+            for item in AppState.comments : Rectangle {
+                min-height: comment-layout.preferred-height;
+                comment-layout := HorizontalLayout { padding-left: item.indent * 48px; spacing: 12px; alignment: start;
+                    Avatar { cross-axis-self-alignment: start; label: "Open channel " + item.author; clickable: item.author-id != ""; width: item.indent > 0 ? 30px : 40px; initials: item.initials; tone: #343441; url: item.avatar; clicked => { AppState.open-channel(item.author-id,0,0,""); } }
+                    VerticalLayout { spacing: 4px; horizontal-stretch: 1;
+                        HorizontalLayout { spacing: 8px; alignment: start; cross-axis-alignment: center;
+                            Text { text: item.author; color: Theme.text; font-size: 13px; font-weight: 600; }
+                            Text { text: item.metadata; color: Theme.subtle; font-size: 13px; }
+                        }
+                        Text { text: item.text; color: #d4d4d8; font-size: 14px; wrap: word-wrap; }
+                        HorizontalLayout { alignment: start; spacing: 4px; cross-axis-alignment: center;
+                            ActionButton { height: 36px; icon-size: 16px; text: item.likes; icon: "like"; tip: item.liked ? "Unlike comment" : "Like comment"; quiet: true; active: item.liked; enabled: item.can-like && !AppState.action-busy; clicked => { AppState.toggle-comment-like(item.id); } }
+                            ActionButton { height: 36px; text: "Reply"; quiet: true; clicked => { root.reply-id = root.reply-id == item.id ? "" : item.id; } }
+                            if item.replies > 0 : ActionButton { height: 36px; icon-size: 16px; text: item.expanded ? "Hide replies" : item.replies + " replies"; icon: "down"; quiet: true; enabled: !AppState.comments-loading; clicked => { AppState.load-replies(item.id,false); } }
+                        }
+                        if item.expanded && item.token != "" : HorizontalLayout { alignment: start;
+                            ActionButton { text: "Load more replies"; quiet: true; enabled: !AppState.comments-loading; clicked => { AppState.load-replies(item.id,true); } }
+                        }
+                        if root.reply-id == item.id : PillInput { placeholder: "Write a reply…"; accepted(text) => { AppState.submit-comment(text,item.id); } }
+                    }
+                }
+            }
+            if AppState.comments-loading : Text { text: "Loading comments…"; color: Theme.subtle; }
+            if !AppState.comments-loading && AppState.comments.length == 0 && AppState.comments-error == "" : Text { text: "No comments available."; color: Theme.subtle; }
+        }
+    }
+    if root.save-open : Rectangle {
+        width: parent.width; height: parent.height;
+        TouchArea { clicked => { root.save-open = false; } }
+        MenuSurface {
+            x: max(12px,parent.width - self.width - (root.width < 700px ? 16px : 36px)); y: 90px;
+            width: min(280px,parent.width - 24px); height: min(360px, save-layout.preferred-height);
+            clip: true;
+            TouchArea {}
+            ScrollView { horizontal-scrollbar-policy: always-off;
+                save-layout := VerticalLayout { padding: 6px; spacing: 0px;
+                    MenuItem { text: "Watch later"; icon: "clock"; clicked => { AppState.save-video("WL"); root.save-open = false; } }
+                    for item in AppState.save-playlists : MenuItem { text: item.title; icon: "playlist"; clicked => { AppState.save-video(item.id); root.save-open = false; } }
+                }
+            }
+        }
+    }
+    KeyBinding { keys: @keys(Escape); enabled: root.save-open || root.reply-id != ""; activated => { root.save-open = false; root.reply-id = ""; } }
+    }
+
+}

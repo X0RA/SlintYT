@@ -1,0 +1,579 @@
+use anyhow::{Context, Result, bail};
+use serde::Deserialize;
+use std::{collections::BTreeMap, ffi::OsStr, process::Stdio, time::Duration};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    process::Command,
+};
+use zeroize::Zeroizing;
+
+#[derive(Clone, Deserialize)]
+pub struct Media {
+    pub(super) streams: Vec<String>,
+    pub user_agent: String,
+    pub referer: String,
+}
+
+impl Media {
+    pub fn source(&self) -> Result<String> {
+        if self.streams.is_empty() || self.streams.len() > 2 {
+            bail!("YouTube did not return playable streams.");
+        }
+        for stream in &self.streams {
+            let url = reqwest::Url::parse(stream)
+                .map_err(|_| anyhow::anyhow!("YouTube returned an invalid stream."))?;
+            if !matches!(url.scheme(), "https" | "http") {
+                bail!("YouTube returned an unsupported stream.");
+            }
+        }
+        if [&self.user_agent, &self.referer]
+            .iter()
+            .any(|s| s.contains(['\r', '\n', '\0']))
+        {
+            bail!("YouTube returned invalid playback headers.");
+        }
+        if self.streams.len() == 1 {
+            return Ok(self.streams[0].clone());
+        }
+        // mpv's EDL joins separate DASH video/audio tracks on one timeline.
+        // Byte-length escaping keeps punctuation in signed URLs literal.
+        Ok(format!(
+            "edl://!new_stream;!no_clip;%{}%{};!new_stream;!no_clip;%{}%{}",
+            self.streams[0].len(),
+            self.streams[0],
+            self.streams[1].len(),
+            self.streams[1]
+        ))
+    }
+}
+
+pub fn valid_id(id: &str) -> bool {
+    id.len() == 11
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+}
+
+/// Invoke the installed executable. No Python interpreter or imports belong to
+/// SlintYT; yt-dlp may be a standalone binary or a package-manager installation.
+pub async fn resolve(id: &str, cookies: &str) -> Result<Media> {
+    resolve_with(OsStr::new("yt-dlp"), id, cookies, Duration::from_secs(90)).await
+}
+
+async fn resolve_with(
+    executable: &OsStr,
+    id: &str,
+    cookies: &str,
+    timeout: Duration,
+) -> Result<Media> {
+    if !valid_id(id) {
+        bail!("This video has an invalid YouTube ID.");
+    }
+    // Public videos do not need account cookies. Signed-in extraction can
+    // expose a smaller set of formats, including URLs rejected by the CDN.
+    // Retain account access for videos that cannot be resolved anonymously.
+    // Both attempts share one deadline; cancellation still kills the child.
+    tokio::time::timeout(timeout, async {
+        match run(executable, id, "", timeout).await {
+            Ok(media) => Ok(media),
+            Err(error) if session_config(cookies)?.is_empty() => Err(error),
+            Err(_) => run(executable, id, cookies, timeout).await,
+        }
+    })
+    .await
+    .context("Finding video streams timed out. Please retry.")?
+}
+
+fn session_config(cookies: &str) -> Result<Zeroizing<String>> {
+    let header = cookie_header(cookies)?;
+    if header.is_empty() {
+        return Ok(header);
+    }
+    let header = Zeroizing::new(format!("Cookie: {}", header.as_str()));
+    // Secrets stay on yt-dlp's stdin, never in arguments or temporary files.
+    let quoted =
+        shlex::try_quote(&header).map_err(|_| anyhow::anyhow!("Invalid browser session."))?;
+    Ok(Zeroizing::new(format!("--add-headers {quoted}\n")))
+}
+
+pub(super) fn cookie_header(cookies: &str) -> Result<Zeroizing<String>> {
+    let mut values = BTreeMap::new();
+    let now = crate::history::now() as i64;
+    for line in cookies.lines() {
+        let line = line.strip_prefix("#HttpOnly_").unwrap_or(line);
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields: Vec<_> = line.split('\t').collect();
+        if fields.len() != 7 {
+            bail!("The browser session has invalid cookie data.");
+        }
+        let host = fields[0].strip_prefix('.').unwrap_or(fields[0]);
+        if !matches!(host, "youtube.com" | "www.youtube.com") || fields[2] != "/" {
+            continue;
+        }
+        let expires = fields[4]
+            .parse::<i64>()
+            .map_err(|_| anyhow::anyhow!("The browser session has invalid cookie data."))?;
+        if expires != 0 && expires <= now {
+            continue;
+        }
+        let (name, value) = (fields[5], fields[6]);
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&c))
+            || !value
+                .bytes()
+                .all(|c| (0x21..=0x7e).contains(&c) && !b"\";,\\".contains(&c))
+        {
+            bail!("The browser session has invalid cookie data.");
+        }
+        // Prefer a host-specific cookie over a parent-domain cookie of the
+        // same name. Only root-path YouTube cookies are supplied to yt-dlp.
+        let priority = u8::from(host == "www.youtube.com");
+        if values
+            .get(name)
+            .is_none_or(|(previous, _)| priority >= *previous)
+        {
+            values.insert(name, (priority, value));
+        }
+    }
+    if values.is_empty() {
+        return Ok(Zeroizing::new(String::new()));
+    }
+    Ok(Zeroizing::new(
+        values
+            .iter()
+            .map(|(name, (_, value))| format!("{name}={value}"))
+            .collect::<Vec<_>>()
+            .join("; "),
+    ))
+}
+
+async fn run(executable: &OsStr, id: &str, cookies: &str, timeout: Duration) -> Result<Media> {
+    parse_media(&extract(executable, id, cookies, true, timeout).await?)
+}
+
+pub(super) async fn catalogue_output(id: &str, cookies: &str) -> Result<Zeroizing<Vec<u8>>> {
+    extract(
+        OsStr::new("yt-dlp"),
+        id,
+        cookies,
+        false,
+        Duration::from_secs(90),
+    )
+    .await
+}
+
+async fn extract(
+    executable: &OsStr,
+    id: &str,
+    cookies: &str,
+    check: bool,
+    timeout: Duration,
+) -> Result<Zeroizing<Vec<u8>>> {
+    if !valid_id(id) {
+        bail!("This video has an invalid YouTube ID.");
+    }
+    let config = session_config(cookies)?;
+    let mut child = Command::new(executable)
+        .args([
+            "--ignore-config",
+            "--no-plugin-dirs",
+            "--config-locations",
+            "-",
+            "--no-cache-dir",
+            "--no-playlist",
+            "--skip-download",
+            "--no-warnings",
+            if check {
+                "--check-formats"
+            } else {
+                "--no-check-formats"
+            },
+            "--socket-timeout",
+            "15",
+            "--retries",
+            "2",
+            "--extractor-retries",
+            "1",
+            "--format",
+            "bestvideo+bestaudio/best",
+            "--dump-single-json",
+            "--",
+        ])
+        .arg(format!("https://www.youtube.com/watch?v={id}"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "yt-dlp could not be started. Install yt-dlp and make sure it is on PATH."
+            )
+        })?;
+    let output = tokio::time::timeout(timeout, async move {
+        let mut stdin = child.stdin.take().context("Could not prepare video lookup.")?;
+        let stdout = child.stdout.take().context("Could not read video lookup.")?;
+        let write = async move {
+            stdin.write_all(config.as_bytes()).await?;
+            drop(stdin);
+            Ok::<_, anyhow::Error>(())
+        };
+        let read = async move {
+            const LIMIT: u64 = 16 * 1024 * 1024;
+            let mut bytes = Zeroizing::new(Vec::new());
+            stdout.take(LIMIT + 1).read_to_end(&mut bytes).await?;
+            if bytes.len() as u64 > LIMIT { bail!("Video lookup returned too much data."); }
+            Ok::<_, anyhow::Error>(bytes)
+        };
+        let ((), bytes, status) = tokio::try_join!(write, read, async { child.wait().await.map_err(anyhow::Error::from) })?;
+        if !status.success() { bail!("Video lookup failed."); }
+        Ok::<_, anyhow::Error>(bytes)
+    }).await.context("Finding video streams timed out. Please retry.")?
+        .map_err(|_| anyhow::anyhow!("Could not find playable streams. The video may be unavailable or require a newer yt-dlp. Please retry."))?;
+    Ok(output)
+}
+
+#[derive(Deserialize, Default)]
+struct Headers {
+    #[serde(rename = "User-Agent", default)]
+    user_agent: String,
+    #[serde(rename = "Referer", default)]
+    referer: String,
+}
+#[derive(Deserialize)]
+struct Format {
+    url: String,
+    #[serde(default)]
+    http_headers: Headers,
+}
+#[derive(Deserialize)]
+struct Info {
+    url: Option<String>,
+    requested_formats: Option<Vec<Format>>,
+    #[serde(default)]
+    http_headers: Headers,
+}
+fn parse_media(output: &[u8]) -> Result<Media> {
+    let info: Info = serde_json::from_slice(output)
+        .map_err(|_| anyhow::anyhow!("yt-dlp returned an invalid response."))?;
+    let formats = info.requested_formats.unwrap_or_else(|| {
+        info.url
+            .map(|url| {
+                vec![Format {
+                    url,
+                    http_headers: Headers::default(),
+                }]
+            })
+            .unwrap_or_default()
+    });
+    let first = formats
+        .first()
+        .context("YouTube did not return playable streams.")?;
+    let user_agent = if info.http_headers.user_agent.is_empty() {
+        first.http_headers.user_agent.clone()
+    } else {
+        info.http_headers.user_agent
+    };
+    let referer = if info.http_headers.referer.is_empty() {
+        first.http_headers.referer.clone()
+    } else {
+        info.http_headers.referer
+    };
+    let media = Media {
+        streams: formats.into_iter().map(|f| f.url).collect(),
+        user_agent,
+        referer: if referer.is_empty() {
+            "https://www.youtube.com/".into()
+        } else {
+            referer
+        },
+    };
+    media.source()?;
+    Ok(media)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_is_supplied_as_one_quoted_stdin_option_with_youtube_scope() {
+        let cookies = "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSAPISID\tsynthetic'quoted\n.example.com\tTRUE\t/\tTRUE\t0\tOTHER\tunrelated\n.youtube.com\tTRUE\t/\tTRUE\t1\tOLD\texpired\n.youtube.com\tTRUE\t/private\tTRUE\t0\tPRIVATE\tpath-specific\n";
+        let config = session_config(cookies).unwrap();
+        let args = shlex::split(&config).unwrap();
+        assert_eq!(args, ["--add-headers", "Cookie: SAPISID=synthetic'quoted"]);
+        assert!(!config.contains("unrelated"));
+        assert!(!config.contains("expired"));
+        assert!(!config.contains("path-specific"));
+        assert!(session_config(".youtube.com\tTRUE\t/\tTRUE\t0\tSAPISID\tx;injected=y\n").is_err());
+    }
+
+    #[test]
+    fn parses_cli_formats_without_forwarding_cookies_or_unsafe_headers() {
+        let data = br#"{"requested_formats":[{"url":"https://cdn.example/video"},{"url":"https://cdn.example/audio"}],"http_headers":{"User-Agent":"Example","Cookie":"synthetic-secret"}}"#;
+        let media = parse_media(data).unwrap();
+        assert_eq!(media.streams.len(), 2);
+        assert_eq!(media.user_agent, "Example");
+        assert!(!media.source().unwrap().contains("synthetic-secret"));
+        assert!(parse_media(br#"{"url":"file:///etc/passwd"}"#).is_err());
+        assert!(
+            parse_media(
+                br#"{"url":"https://example.com","http_headers":{"User-Agent":"bad\r\nheader"}}"#
+            )
+            .is_err()
+        );
+        assert_eq!(
+            parse_media(br#"{"url":"https://cdn.example/muxed"}"#)
+                .unwrap()
+                .streams
+                .len(),
+            1
+        );
+    }
+
+    #[cfg(unix)]
+    fn fake_executable(root: &Path, body: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = root.join("fake-yt-dlp");
+        std::fs::write(&path, format!("#!/bin/sh\n{body}")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        path
+    }
+
+    #[cfg(unix)]
+    use std::path::Path;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn executable_receives_no_secret_arguments_and_failures_are_sanitized() {
+        let root = tempfile::tempdir().unwrap();
+        let exe = fake_executable(
+            root.path(),
+            r#"
+case "$*" in *synthetic-secret*|*python*|*--cookies*) exit 11;; esac
+case "$*" in *--ignore-config*--no-plugin-dirs*--config-locations*) ;; *) exit 12;; esac
+case "$*" in *--check-formats*) ;; *) exit 14;; esac
+config=$(cat)
+case "$config" in *'Cookie: SAPISID=synthetic-secret'*) ;; *) exit 13;; esac
+printf '%s\n' '{"url":"https://cdn.example/video"}'
+"#,
+        );
+        let cookies = ".youtube.com\tTRUE\t/\tTRUE\t0\tSAPISID\tsynthetic-secret\n";
+        assert!(
+            run(
+                exe.as_os_str(),
+                "abcdefghijk",
+                cookies,
+                Duration::from_secs(3)
+            )
+            .await
+            .is_ok()
+        );
+        fake_executable(
+            root.path(),
+            "echo synthetic-secret >&2\necho synthetic-secret\nexit 1\n",
+        );
+        let result = run(
+            exe.as_os_str(),
+            "abcdefghijk",
+            cookies,
+            Duration::from_secs(3),
+        )
+        .await;
+        assert!(
+            !result
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("synthetic-secret")
+        );
+        fake_executable(root.path(), "exec sleep 30\n");
+        let result = run(
+            exe.as_os_str(),
+            "abcdefghijk",
+            "",
+            Duration::from_millis(100),
+        )
+        .await;
+        assert!(result.err().unwrap().to_string().contains("timed out"));
+        assert!(
+            run(
+                root.path().join("missing").as_os_str(),
+                "abcdefghijk",
+                "",
+                Duration::from_secs(3)
+            )
+            .await
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("PATH")
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn public_stream_lookup_uses_no_cookies_and_account_access_is_a_fallback() {
+        let root = tempfile::tempdir().unwrap();
+        let cookies = ".youtube.com\tTRUE\t/\tTRUE\t0\tSAPISID\tsynthetic-secret\n";
+        let exe = fake_executable(
+            root.path(),
+            r#"
+config=$(cat)
+[ -z "$config" ] || exit 21
+printf '%s\n' '{"url":"https://cdn.example/public"}'
+"#,
+        );
+        let media = resolve_with(
+            exe.as_os_str(),
+            "abcdefghijk",
+            cookies,
+            Duration::from_secs(3),
+        )
+        .await
+        .unwrap();
+        assert_eq!(media.source().unwrap(), "https://cdn.example/public");
+
+        fake_executable(
+            root.path(),
+            r#"
+config=$(cat)
+if [ ! -e "$0.attempted" ]; then
+    [ -z "$config" ] || exit 22
+    touch "$0.attempted"
+    exit 1
+fi
+case "$config" in *'Cookie: SAPISID=synthetic-secret'*) ;; *) exit 23;; esac
+printf '%s\n' '{"url":"https://cdn.example/account"}'
+"#,
+        );
+        let media = resolve_with(
+            exe.as_os_str(),
+            "abcdefghijk",
+            cookies,
+            Duration::from_secs(3),
+        )
+        .await
+        .unwrap();
+        assert_eq!(media.source().unwrap(), "https://cdn.example/account");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn fallback_is_skipped_without_cookies_and_shares_the_lookup_deadline() {
+        let root = tempfile::tempdir().unwrap();
+        let exe = fake_executable(
+            root.path(),
+            r#"
+cat >/dev/null
+echo attempt >> "$0.attempts"
+exit 1
+"#,
+        );
+        assert!(
+            resolve_with(exe.as_os_str(), "abcdefghijk", "", Duration::from_secs(3))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            std::fs::read_to_string(exe.with_extension("attempts")).unwrap(),
+            "attempt\n"
+        );
+        fake_executable(root.path(), "cat >/dev/null\nexec sleep 30\n");
+        let error = resolve_with(
+            exe.as_os_str(),
+            "abcdefghijk",
+            ".youtube.com\tTRUE\t/\tTRUE\t0\tSAPISID\tsynthetic-secret\n",
+            Duration::from_millis(100),
+        )
+        .await
+        .err()
+        .unwrap();
+        assert!(error.to_string().contains("timed out"));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires explicit SLINTYT_TEST_PROFILE authorization, yt-dlp and network access"]
+    async fn live_native_cookie_import_and_cli_stream_lookup() {
+        let selection = crate::browser::Selection {
+            browser: "chromium".into(),
+            profile: std::env::var("SLINTYT_TEST_PROFILE")
+                .expect("Set an authorized test profile")
+                .into(),
+            keyring: None,
+        };
+        let cookies = Zeroizing::new(
+            crate::cookies::read(&selection)
+                .await
+                .expect("Native cookie import failed"),
+        );
+        let id = std::env::var("SLINTYT_TEST_VIDEO").unwrap_or_else(|_| "dQw4w9WgXcQ".into());
+        let media = resolve(&id, &cookies).await.expect("CLI lookup failed");
+        assert!(media.source().is_ok());
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(20))
+            .build()
+            .unwrap();
+        for (index, stream) in media.streams.iter().enumerate() {
+            let response = client
+                .get(stream)
+                .header("User-Agent", &media.user_agent)
+                .header("Referer", &media.referer)
+                .header("Range", "bytes=0-1023")
+                .send()
+                .await
+                .unwrap_or_else(|_| panic!("Stream {} request failed", index + 1));
+            let status = response.status();
+            eprintln!("Stream {} HTTP status: {status}", index + 1);
+            assert!(
+                status.is_success(),
+                "Stream {} is not playable: {status}",
+                index + 1
+            );
+        }
+        eprintln!(
+            "Native import and yt-dlp lookup passed; {} stream(s), all session values withheld",
+            media.streams.len()
+        );
+    }
+
+    #[test]
+    fn validates_video_ids_and_escapes_separate_streams() {
+        assert!(valid_id("aB_12-xyZ09"));
+        for id in [
+            "",
+            "https://youtube.com/watch?v=abcdefghijk",
+            "../abcdefgh",
+            "abcdefghijé",
+        ] {
+            assert!(!valid_id(id));
+        }
+        let media = Media {
+            streams: vec![
+                "https://cdn.example/video?a=1;b=2".into(),
+                "https://cdn.example/audio?q=é".into(),
+            ],
+            user_agent: String::new(),
+            referer: String::new(),
+        };
+        assert_eq!(
+            media.source().unwrap(),
+            format!(
+                "edl://!new_stream;!no_clip;%{}%{};!new_stream;!no_clip;%{}%{}",
+                media.streams[0].len(),
+                media.streams[0],
+                media.streams[1].len(),
+                media.streams[1]
+            )
+        );
+        let invalid = Media {
+            streams: vec!["file:///etc/passwd".into()],
+            ..media
+        };
+        assert!(invalid.source().is_err());
+    }
+}

@@ -1,0 +1,50 @@
+import { Theme } from "../theme.slint";
+import { AppState } from "../state.slint";
+import { Avatar } from "../components/avatar.slint";
+import { ActionButton } from "../components/action-button.slint";
+import { PillInput } from "../components/pill-input.slint";
+export component ChannelHeader inherits Rectangle {
+    private property <bool> expanded: false;
+    height: root.expanded ? 460px : 350px;
+    function switch-tab(direction: int) {
+        let candidate = mod(AppState.channel-tab + direction + 3,3);
+        let tab = candidate == 1 && !AppState.channel-has-live ? (direction > 0 ? 2 : 0) : candidate;
+        AppState.open-channel(AppState.channel-id,tab,0,"");
+    }
+    FocusScope {
+    VerticalLayout { spacing: 20px;
+        Rectangle {
+            height: root.expanded ? 350px : 240px; border-radius: 28px; clip: true; background: #1e2633;
+            Image { source: AppState.channel-banner; width: parent.width; height: parent.height; image-fit: cover; }
+            Rectangle { width: parent.width; height: parent.height; background: @linear-gradient(180deg, #0a0a0b00, #0a0a0bef); }
+            VerticalLayout { padding: 26px; alignment: end; spacing: 12px;
+                HorizontalLayout { spacing: 20px; cross-axis-alignment: center;
+                    Avatar { width: root.width < 700px ? 64px : 80px; initials: AppState.channel-initials; tone: AppState.channel-tone; url: AppState.channel-avatar; }
+                    VerticalLayout { alignment: center; spacing: 8px;
+                        Text { text: AppState.channel-name; color: white; font-size: root.width < 700px ? 26px : 36px; font-weight: 700; overflow: elide; }
+                        Text { text: AppState.channel-meta; color: #d4d4d8; font-size: 13px; overflow: elide; }
+                    }
+                    ActionButton { text: AppState.channel-subscribed ? "Subscribed" : "Subscribe"; primary: !AppState.channel-subscribed; enabled: !AppState.action-busy; clicked => { AppState.toggle-subscription(AppState.channel-id, !AppState.channel-subscribed); } }
+                }
+                Text { text: AppState.channel-description; color: #e4e4e7; font-size: 13px; wrap: word-wrap; overflow: elide; height: root.expanded ? 122px : 36px; }
+                HorizontalLayout { spacing: 8px; alignment: start;
+                    ActionButton { text: root.expanded ? "Less" : "More"; quiet: true; clicked => { root.expanded = !root.expanded; } }
+                    for link[index] in AppState.channel-links : ActionButton { visible: root.width > 700px || index == 0; text: link.title; icon: "link"; clicked => { AppState.open-url(link.url); } }
+                }
+            }
+        }
+        HorizontalLayout { spacing: 6px; cross-axis-alignment: center;
+            for tab[index] in ["Videos", "Live", "Playlists"] : ActionButton { text: tab; visible: index != 1 || AppState.channel-has-live; active: AppState.channel-tab == index; quiet: true; clicked => { AppState.open-channel(AppState.channel-id, index, 0, ""); } }
+            Rectangle { horizontal-stretch: 1; background: transparent; }
+            channel-search := PillInput { width: min(260px, root.width / 3); icon: "search"; text <=> AppState.channel-query; placeholder: "Search " + AppState.channel-name; accepted(text) => { AppState.open-channel(AppState.channel-id, 0, 0, text); } }
+        }
+        if AppState.channel-tab != 2 && AppState.channel-query == "" : HorizontalLayout { alignment: start; spacing: 8px;
+            for label[index] in ["Latest", "Popular", "Oldest"] : ActionButton { text: label; primary: AppState.channel-sort == index; quiet: AppState.channel-sort != index; clicked => { AppState.open-channel(AppState.channel-id, AppState.channel-tab, index, ""); } }
+        }
+        if AppState.channel-query != "" : Text { text: "Results for “" + AppState.channel-query + "” in " + AppState.channel-name; color: Theme.muted; font-size: 13px; }
+    }
+    KeyBinding { keys: @keys(LeftArrow); enabled: !channel-search.has-focus; activated => { root.switch-tab(-1); } }
+    KeyBinding { keys: @keys(RightArrow); enabled: !channel-search.has-focus; activated => { root.switch-tab(1); } }
+    }
+
+}

@@ -1,0 +1,38 @@
+import { Theme } from "../theme.slint";
+import { Icon } from "icon.slint";
+export component ActionButton inherits Rectangle {
+    in property <string> text;
+    in property <string> icon;
+    in property <bool> enabled: true;
+    in property <bool> active: false;
+    in property <bool> primary: false;
+    in property <bool> quiet: false;
+    in property <bool> outlined: false;
+    in property <string> tip: root.text;
+    in property <length> icon-size: 20px;
+    callback clicked();
+    min-width: root.text == "" ? root.height : label.preferred-width + (root.icon == "" ? 32px : 60px);
+    preferred-width: self.min-width;
+    max-width: self.min-width;
+    height: 42px;
+    horizontal-stretch: 0;
+    border-radius: 24px;
+    border-width: root.outlined || focus.has-focus ? 1px : 0px;
+    border-color: focus.has-focus ? Theme.accent : Theme.border;
+    opacity: root.enabled ? 1 : 0.4;
+    background: root.primary ? Theme.strong : touch.has-hover && root.enabled ? Theme.hover : root.active ? #26262c : root.quiet || root.outlined ? transparent : Theme.raised;
+    accessible-role: button;
+    accessible-label: root.tip;
+    accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { focus.focus(); root.clicked(); } }
+    forward-focus: focus;
+    HorizontalLayout {
+        padding-left:  root.text == "" ? 0px : 16px;
+        padding-right: root.text == "" ? 0px : 16px;
+        spacing: root.text == "" || root.icon == "" ? 0px : 8px; alignment: center; cross-axis-alignment: center;
+        if root.icon != "" : Icon { name: root.icon; tint: root.primary ? Theme.background : root.active ? Theme.strong : Theme.text; width: root.icon-size; height: root.icon-size; }
+        label := Text { text: root.text; visible: root.text != ""; color: root.primary ? Theme.background : root.active ? Theme.strong : Theme.text; font-size: 13px; font-weight: root.active || root.primary ? 600 : 500; vertical-alignment: center; overflow: elide; }
+    }
+    touch := TouchArea { enabled: root.enabled; mouse-cursor: pointer; clicked => { focus.focus(); root.clicked(); } }
+    focus := FocusScope { focus-on-click: false; enabled: root.enabled; key-pressed(event) => { if event.text == "\n" || event.text == " " { root.clicked(); return accept; } return reject; } }
+}

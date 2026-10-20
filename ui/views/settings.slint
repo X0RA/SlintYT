@@ -1,0 +1,139 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { ActionButton } from "../components/action-button.slint";
+import { Choice } from "../components/choice.slint";
+import { PillInput } from "../components/pill-input.slint";
+import { AppState } from "../state.slint";
+component Switch inherits Rectangle {
+    in property <string> label;
+    in-out property <bool> checked: false;
+    width: 52px; height: 44px;
+    accessible-role: checkbox; accessible-label: root.label; accessible-checked: root.checked; accessible-action-default => { root.checked = !root.checked; }
+    Rectangle { width: 40px; height: 24px; border-radius: 12px; background: root.checked ? Theme.accent : #2e2e35;
+        animate background { duration: 150ms; }
+        Rectangle { x: root.checked ? 19px : 3px; y: 3px; width: 18px; height: 18px; background: white; border-radius: 9px; animate x { duration: 150ms; } }
+    }
+    TouchArea { mouse-cursor: pointer; clicked => { root.checked = !root.checked; } }
+}
+// One setting: label and explanation on the left, a control on the right.
+// kind 0 = choice, 1 = switch, 2 = text field, 3 = action button.
+component SettingRow inherits Rectangle {
+    in property <string> label;
+    in property <string> help;
+    in property <int> kind: 0;
+    in property <[string]> options;
+    in property <string> action;
+    in property <bool> first: false;
+    in-out property <bool> checked: false;
+    in-out property <string> value;
+    callback activated();
+    min-height: layout.preferred-height;
+    if !root.first : Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: #1f1f24; }
+    layout := HorizontalLayout {
+        padding-left: 18px; padding-right: 18px; padding-top: 14px; padding-bottom: 14px; spacing: 24px;
+        cross-axis-alignment: center;
+        VerticalLayout { horizontal-stretch: 1; alignment: center; spacing: 3px;
+            Text { text: root.label; color: Theme.text; font-size: 14px; font-weight: 500; }
+            Text { text: root.help; color: Theme.subtle; font-size: 13px; wrap: word-wrap; }
+        }
+        if root.kind == 0 : Choice { options: root.options; label: root.label; }
+        if root.kind == 1 : Switch { label: root.label; checked <=> root.checked; }
+        if root.kind == 2 : PillInput { preferred-width: 280px; min-width: 140px; horizontal-stretch: 0; height: 40px; border-radius: 10px; placeholder: "deband=yes  video-sync=display-resample"; text <=> root.value; }
+        if root.kind == 3 : ActionButton { height: 40px; text: root.action; outlined: true; clicked => { root.activated(); } }
+    }
+}
+component SettingSection inherits VerticalLayout {
+    in property <string> title;
+    in property <string> help;
+    spacing: 0px;
+    Text { text: root.title; color: Theme.text; font-size: 15px; font-weight: 600; }
+    Text { text: root.help; color: Theme.subtle; font-size: 13px; }
+    Rectangle { height: 14px; }
+    Rectangle { background: Theme.surface; border-width: 1px; border-color: #1e1e23; border-radius: 14px; clip: true;
+        VerticalLayout { padding: 1px; spacing: 0px; @children }
+    }
+}
+component SectionLink inherits Rectangle {
+    in property <string> text;
+    in property <bool> active;
+    callback clicked();
+    height: 40px; border-radius: 10px;
+    background: root.active ? Theme.raised : transparent;
+    accessible-role: button; accessible-label: root.text; accessible-action-default => { root.clicked(); }
+    Text { x: 12px; width: parent.width - 24px; text: root.text; color: root.active ? Theme.strong : touch.has-hover ? Theme.text : Theme.muted; font-size: 14px; font-weight: 500; vertical-alignment: center; overflow: elide; }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+export component SettingsPage inherits Rectangle {
+    private property <bool> narrow: root.width < 800px;
+    // The section list highlights the section scrolled to; clicking one jumps to it.
+    private property <length> scrolled: -sections.content-y + 24px;
+    // Near the end the page cannot scroll a short section to the top, so keep the clicked one highlighted there.
+    private property <int> picked: -1;
+    private property <bool> at-end: sections.content-y <= -(sections.content-height - sections.visible-height) + 1px;
+    private property <int> section: root.at-end && root.picked >= 0 ? root.picked : root.scrolled >= about.y ? 7 : root.scrolled >= storage.y ? 6 : root.scrolled >= account.y ? 5 : root.scrolled >= feed.y ? 4 : root.scrolled >= watch.y ? 3 : root.scrolled >= interface.y ? 2 : root.scrolled >= engine.y ? 1 : 0;
+    function jump(index: int) {
+        let target = index == 0 ? playback.y : index == 1 ? engine.y : index == 2 ? interface.y : index == 3 ? watch.y : index == 4 ? feed.y : index == 5 ? account.y : index == 6 ? storage.y : about.y;
+        root.picked = index;
+        sections.content-y = -min(target, max(0px, sections.content-height - sections.visible-height));
+    }
+    background: Theme.background;
+    HorizontalLayout {
+        padding-left: max(0px, (root.width - 980px) / 2); padding-right: self.padding-left;
+        HorizontalLayout {
+        spacing: root.narrow ? 16px : 48px;
+        VerticalLayout { width: root.narrow ? 120px : 180px; alignment: start; spacing: 2px;
+            for name[index] in ["Playback", "Video engine", "Interface", "Watch status", "Feed", "Account", "Storage", "About"] : SectionLink {
+                text: name; active: root.section == index; clicked => { root.jump(index); }
+            }
+        }
+        sections := ScrollView {
+            horizontal-stretch: 1;
+            horizontal-scrollbar-policy: always-off;
+            VerticalLayout {
+                width: sections.visible-width;
+                spacing: 36px; padding-bottom: 48px; padding-right: 12px;
+                playback := SettingSection { title: "Playback"; help: "Which stream gets picked and how videos start.";
+                    SettingRow { first: true; label: "Preferred quality"; help: "Highest resolution to request. Falls back when a video does not offer it."; kind: 0; options: ["1080p", "Best available", "2160p", "1440p", "720p"]; action: ""; checked: false; }
+                    SettingRow { label: "Preferred codec"; help: "AV1 streams are smaller, but need a GPU that decodes AV1 smoothly."; kind: 0; options: ["VP9", "AV1", "H.264"]; action: ""; checked: false; }
+                    SettingRow { label: "Default speed"; help: "Applied to every new video."; kind: 0; options: ["1×", "0.75×", "1.25×", "1.5×", "2×"]; action: ""; checked: false; }
+                    SettingRow { label: "Subtitles"; help: "Load captions automatically when the video has them."; kind: 0; options: ["Off", "English", "Automatic"]; action: ""; checked: false; }
+                    SettingRow { label: "Resume where I left off"; help: "Start from your last position when progress is known."; kind: 1; options: []; action: ""; checked: true; }
+                    SettingRow { label: "Autoplay next"; help: "Play the next video in a playlist automatically."; kind: 1; options: []; action: ""; checked: false; }
+                }
+                engine := SettingSection { title: "Video engine"; help: "libmpv decodes and renders into the app’s OpenGL surface.";
+                    SettingRow { first: true; label: "Hardware decoding"; help: "Sets mpv’s hwdec. Auto-safe picks a backend known to work."; kind: 0; options: ["auto-safe", "vaapi", "nvdec", "vulkan", "no"]; action: ""; checked: false; }
+                    SettingRow { label: "Stream buffer"; help: "How much video mpv reads ahead. Larger buffers help with bad connections."; kind: 0; options: ["Normal · 150 MB", "Small · 50 MB", "Large · 500 MB"]; action: ""; checked: false; }
+                    SettingRow { label: "Load my mpv.conf"; help: "Apply your own mpv configuration on top of these settings."; kind: 1; options: []; action: ""; checked: false; }
+                    SettingRow { label: "Extra mpv options"; help: "Set on the player at startup, as key=value pairs."; kind: 2; options: []; action: ""; checked: false; }
+                    SettingRow { label: "mpv log level"; help: "What libmpv writes to the app log."; kind: 0; options: ["Warnings", "Errors", "Info", "Debug"]; action: ""; checked: false; }
+                }
+                interface := SettingSection { title: "Interface"; help: "How the window looks and behaves.";
+                    SettingRow { first: true; label: "Interface scale"; help: "Overrides the display’s scale factor."; kind: 0; options: ["Follow system", "100%", "125%", "150%", "200%"]; action: ""; checked: false; }
+                    SettingRow { label: "Hide player controls after"; help: "Time without mouse movement before the controls fade."; kind: 0; options: ["3 seconds", "2 seconds", "5 seconds", "Never"]; action: ""; checked: false; }
+                }
+                watch := SettingSection { title: "Watch status"; help: "How videos get marked as watched.";
+                    SettingRow { first: true; label: "Mark as watched after"; help: "How much of a video you need to see before it counts."; kind: 0; options: ["90%", "50%", "75%", "The end"]; action: ""; checked: false; }
+                    SettingRow { label: "Sync progress to YouTube"; help: "Report playback to your YouTube history so other devices stay in step."; kind: 1; options: []; action: ""; checked: true; }
+                    SettingRow { label: "Hide watched videos"; help: "Leave watched videos out of Home and Subscriptions."; kind: 1; options: []; action: ""; checked: false; }
+                }
+                feed := SettingSection { title: "Feed"; help: "What shows up in Home and Subscriptions.";
+                    SettingRow { first: true; label: "Hide Shorts"; help: "Skip vertical short-form videos."; kind: 1; options: []; action: ""; checked: true; }
+                    SettingRow { label: "Hide live streams and premieres"; help: "Only show videos that are ready to watch."; kind: 1; options: []; action: ""; checked: false; }
+                }
+                account := SettingSection { title: "Account"; help: "Your YouTube session is borrowed from a browser profile.";
+                    SettingRow { first: true; label: "Browser profile"; help: AppState.account-label == "" ? "Not connected" : AppState.account-label; kind: 3; options: ["Change browser"]; action: "Change browser"; checked: false; activated => { AppState.settings-open = false; AppState.setup-open = true; AppState.error = ""; AppState.scan-profiles(); } }
+                    SettingRow { label: "Refresh on launch"; help: "Reload your feed and history each time the app opens."; kind: 1; options: []; action: ""; checked: true; }
+                }
+                storage := SettingSection { title: "Storage"; help: "Data kept on this computer.";
+                    SettingRow { first: true; label: "Thumbnail cache"; help: "Saved images that make pages load faster."; kind: 3; options: ["Clear cache"]; action: "Clear cache"; checked: false; }
+                    SettingRow { label: "Watch progress"; help: "Local positions for resuming videos."; kind: 3; options: ["Clear progress"]; action: "Clear progress"; checked: false; }
+                    SettingRow { label: "App data folder"; help: "Config, history cache, and logs."; kind: 3; options: ["Open folder"]; action: "Open folder"; checked: false; }
+                }
+                about := SettingSection { title: "About"; help: "Version details for bug reports.";
+                    SettingRow { first: true; label: "SlintYT 0.1.0"; help: "Rust · Slint 1.18 · libmpv"; kind: 3; options: ["Copy debug info"]; action: "Copy debug info"; checked: false; activated => { AppState.clipboard-text = "SlintYT 0.1.0 · Rust · Slint 1.18 · libmpv"; AppState.clipboard-serial += 1; AppState.toast = "Debug info copied"; } }
+                }
+            }
+        }
+    }
+    }
+}

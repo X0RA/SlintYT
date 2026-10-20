@@ -1,0 +1,50 @@
+import { Button, Palette } from "std-widgets.slint";
+import { VideoPlayer } from "../views/video-player.slint";
+import { AppState } from "../state.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData } from "../state.slint";
+
+export component AppWindow inherits Window {
+    title: "Video player preview";
+    width: 1100px; height: 720px;
+    init => {
+        Palette.color-scheme = ColorScheme.dark;
+        AppState.player-rich-description = @markdown("A mock description with a [website](https://example.com), a timestamp and multiple lines.\n\nThis preview works without backend callbacks.");
+        AppState.player-title = "A video playing inside Slint";
+        AppState.player-channel = "Workshop"; AppState.player-channel-initials = "W"; AppState.player-stats = "12K views · 2 days ago"; AppState.player-description = "A video description with standalone mock data."; AppState.breadcrumbs = [{id:"a",title:"Hyperoptimized Engineer 2026",position:20},{id:"b",title:"\"Editing Memes Is a Lost Art...\"",position:40},{id:"c",title:"Qualcomm made a Pi 5 killer. Good luck getting one.",position:60},{id:"mock",title:"A video playing inside Slint",position:146}];
+        AppState.player-texture = @image-url("mock-thumbnail.svg");
+        AppState.player-position = 146;
+        AppState.player-duration = 3726;
+        AppState.player-subtitles = ["Off", "English [en] · uploaded", "English [en] · automatic", "German [de] · automatic"];
+        AppState.player-qualities = ["Best available", "2160p 60fps", "1080p 60fps", "720p 30fps"];
+        AppState.player-quality-details = ["Picked automatically by yt-dlp", "av01.0.12M.08 + opus · webm · https · 401 · SDR", "vp09.00.41.08 + opus · webm · https · 303 · SDR", "avc1.64001F + mp4a.40.2 · mp4 · https · 22 · unavailable"];
+    }
+    VerticalLayout {
+        HorizontalLayout {
+            Button { text: "Subtitles loading"; clicked => { AppState.player-subtitles-loading = !AppState.player-subtitles-loading; } }
+            Button { text: "No subtitles"; clicked => { AppState.player-subtitles-loading = false; AppState.player-subtitles = ["Off"]; AppState.player-subtitle-index = 0; AppState.player-subtitle-note = "No subtitles available."; } }
+            Button { text: "Subtitle error"; clicked => { AppState.player-subtitles-loading = false; AppState.player-subtitle-index = 0; AppState.player-subtitle-note = "Could not load subtitles. Try another track or refresh streams."; } }
+            Button { text: "Subtitle options"; clicked => { AppState.player-subtitles = ["Off", "English [en] · uploaded", "English [en] · automatic", "German [de] · automatic"]; AppState.player-subtitle-note = ""; AppState.player-subtitles-loading = false; } }
+        }
+        HorizontalLayout {
+            Button { text: "Loading qualities"; clicked => { AppState.player-qualities-loading = !AppState.player-qualities-loading; } }
+            Button { text: "Partial list"; clicked => { AppState.player-qualities-loading = false; AppState.player-quality-note = "Signed-in quality lookup failed; showing public options. Retry to refresh the list."; } }
+            Button { text: "Loading"; clicked => { AppState.player-error = ""; AppState.player-loading = true; } }
+            Button { text: "Playing"; clicked => { AppState.player-loading = false; AppState.player-buffering = false; AppState.player-error = ""; AppState.player-paused = false; AppState.player-ended = false; } }
+        }
+        HorizontalLayout {
+            Button { text: "Buffering"; clicked => { AppState.player-loading = false; AppState.player-buffering = true; } }
+            Button { text: "Progress error"; clicked => { AppState.player-progress-note = AppState.player-progress-note == "" ? "Could not sync watch progress to YouTube. Retrying…" : ""; } }
+            Button { text: "Ended"; clicked => { AppState.player-ended = true; AppState.player-position = AppState.player-duration; AppState.player-paused = true; } }
+            Button { text: "Error"; clicked => { AppState.player-loading = false; AppState.player-buffering = false; AppState.player-error = "This video is unavailable. Check your connection and retry."; } }
+            Button { text: "Compact"; clicked => { root.width = 720px; root.height = 650px; AppState.player-title = "A very long video title that should elide without pushing the Back button off the screen"; } }
+        }
+        VideoPlayer {
+            select-subtitle(index) => { AppState.player-subtitle-index = index; AppState.player-subtitle-note = ""; }
+            select-quality(index) => { AppState.player-quality-index = index; }
+            toggle => { AppState.player-paused = !AppState.player-paused; AppState.player-ended = false; }
+            retry => { AppState.player-error = ""; AppState.player-loading = true; }
+            seek(value) => { AppState.player-position = value; }
+            toggle-fullscreen => { AppState.player-fullscreen = !AppState.player-fullscreen; }
+        }
+    }
+}

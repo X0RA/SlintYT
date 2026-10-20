@@ -1,0 +1,7 @@
+/target
+/dist/
+/deps/
+/mpv-dev/
+ui/assets/logo.icns
+/md/
+.serena/

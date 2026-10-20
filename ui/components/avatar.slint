@@ -1,0 +1,25 @@
+import { Theme } from "../theme.slint";
+import { AppState } from "../state.slint";
+// Round profile picture. Falls back to coloured initials until the image has loaded.
+export component Avatar inherits Rectangle {
+    in property <string> initials: "?";
+    in property <color> tone: #3b4a63;
+    // Profile picture URL. Empty keeps the initials.
+    in property <string> url;
+    in property <bool> clickable: false;
+    in property <string> label;
+    callback clicked();
+    private property <image> source: AppState.avatar-image(root.url, AppState.avatar-epoch);
+    private property <bool> loaded: root.source.width > 0;
+    width: 48px; height: self.width;
+    border-radius: self.width / 2;
+    clip: true;
+    background: root.tone;
+    accessible-role: button;
+    accessible-enabled: root.clickable;
+    accessible-label: root.label;
+    accessible-action-default => { if root.clickable { root.clicked(); } }
+    if !root.loaded : Text { text: root.initials; color: Theme.strong; font-size: parent.width * 0.3; font-weight: 700; horizontal-alignment: center; vertical-alignment: center; }
+    if root.loaded : Image { width: parent.width; height: parent.height; source: root.source; image-fit: cover; }
+    TouchArea { enabled: root.clickable; mouse-cursor: pointer; clicked => { root.clicked(); } }
+}

@@ -1,0 +1,21 @@
+import { Button, Palette } from "std-widgets.slint";
+import { BrowserPicker } from "../views/browser-picker.slint";
+import { AppState } from "../state.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData } from "../state.slint";
+export component AppWindow inherits Window {
+    title: "Browser picker preview";
+    width: 840px; height: 760px; background: #0f0f0f;
+    init => {
+        Palette.color-scheme = ColorScheme.dark;
+        AppState.profiles = [{ label: "chromium · Example Browser · Default", path: "/example/.config/browser/Default" }, { label: "firefox · Firefox · Personal", path: "/example/.mozilla/firefox/personal" }];
+    }
+    VerticalLayout {
+        padding: 16px; spacing: 12px;
+        HorizontalLayout {
+            Button { text: "Empty"; clicked => { AppState.profiles = []; } }
+            Button { text: "Loading"; clicked => { AppState.busy = !AppState.busy; AppState.status = "Reading browser cookies…"; } }
+            Button { text: "Error"; clicked => { AppState.busy = false; AppState.error = "No YouTube cookies found. Sign in to YouTube in this profile, then retry."; } }
+        }
+        BrowserPicker {}
+    }
+}

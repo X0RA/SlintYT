@@ -1,0 +1,76 @@
+import { Button, Palette } from "std-widgets.slint";
+import { AppContent } from "../app-content.slint";
+import { AppState } from "../state.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData } from "../state.slint";
+export component AppWindow inherits Window {
+    title: "SlintYT app preview";
+    icon: @image-url("../assets/appicon.png");
+    preferred-width: 1280px; preferred-height: 820px;
+    min-width: 480px; min-height: 540px;
+    init => {
+        Palette.color-scheme = ColorScheme.dark;
+        AppState.player-rich-description = @markdown("A mock description with a [website](https://example.com), a timestamp and multiple lines.\n\nThis preview works without backend callbacks.");
+        AppState.initializing = false;
+        AppState.setup-open = false;
+        AppState.connected = true;
+        AppState.account-label = "Helium · Default";
+        AppState.account-name = "Example creator";
+        AppState.account-initial = "EC";
+        AppState.account-browser = "Helium";
+        AppState.account-profile = "Default";
+        AppState.saved-profiles = [
+            {name: "Second channel", label: "Helium · Profile 2", initials: "SC"},
+            {name: "Example creator", label: "Helium · Default", initials: "EC"}
+        ];
+        AppState.active-profile = 1;
+        AppState.videos = [{ id: "abcdefghijk", title: "Building a desktop app with Rust and Slint", channel: "Example channel", initials:"EC", tone:#3b4a63, thumbnail:@image-url("mock-thumbnail.svg"), metadata: "12K views · 2 days ago", duration: "24:10", watched: 1, watch-progress: 42 }, { id: "lmnopqrstuv", title: "A very long title that wraps cleanly without hiding channel information", channel: "Workshop", initials:"W", tone:#5e4a35, thumbnail:@image-url("mock-thumbnail.svg"), metadata: "3K views · 1 week ago", duration: "1:12:36", watched: 2, watch-progress: -1 }, { id: "12345678901", title: "Live from the studio", channel: "Studio", initials:"S", tone:#3e5a4c, thumbnail:@image-url("mock-thumbnail.svg"), metadata: "Streaming now", duration: "LIVE", watched: 0, watch-progress: -1 }, { id: "abcdefghijl", title: "The quiet side of the city", channel: "On foot", initials:"OF", tone:#5a3f5e, thumbnail:@image-url("mock-thumbnail.svg"), metadata: "8K views · 3 days ago", duration: "18:27" }];
+        AppState.watch-note = "Using cached watch history · 1273 watched videos. Refreshing recent watches…";
+        AppState.sections = [{ start: 0, count: 3 }, { start: 3, count: 1 }];
+        AppState.has-more = true;
+        AppState.profiles = [{ label: "chromium · Example · Default", path: "/example/.config/browser/Default" }];
+    }
+    VerticalLayout {
+        HorizontalLayout {
+            Button { text: "Saved profiles"; clicked => { AppState.account-menu-open = true; } }
+            Button { text: "Long names"; clicked => { AppState.saved-profiles = [
+                {name: "A very long YouTube channel display name",label: "Helium · Profile 2 with a long browser profile name",initials:"YT"},
+                {name:"Example creator",label:"Helium · Default",initials: "EC"},
+                {name:"Another creator",label:"Firefox · Personal",initials:"AC"},
+                {name:"Work channel",label:"Chromium · Work",initials:"WC"},
+                {name:"Studio",label:"Chromium · Studio",initials:"S"},
+                {name:"Last channel",label:"Firefox · Testing",initials:"LC"}]; AppState.active-profile = 1; AppState.account-name = "Example creator"; AppState.account-label = "Helium · Default"; AppState.account-initial = "EC"; AppState.account-menu-open = true; } }
+            Button { text: "Only current"; clicked => { AppState.saved-profiles = [{name:"Example creator",label:"Helium · Default",initials: "EC"}]; AppState.active-profile = 0; AppState.account-name = "Example creator"; AppState.account-label = "Helium · Default"; AppState.account-initial = "EC"; AppState.account-menu-open = true; } }
+            Button { text: "No saved profiles"; clicked => { AppState.saved-profiles = []; AppState.account-menu-open = true; } }
+            Button { text: "Switching profile"; clicked => { AppState.busy = !AppState.busy; AppState.status = "Connecting saved profile…"; AppState.account-menu-open = true; } }
+        }
+        HorizontalLayout { min-width: 0px;
+            Button { min-width: 0px; text: "Compact"; clicked => { root.width = 600px; root.height = 650px; } }
+            Button { min-width: 0px; text: "History"; clicked => { AppState.view-kind = 1; AppState.page-title = "Watch history"; AppState.page-subtitle = "Videos you’ve watched on YouTube"; } }
+            Button { min-width: 0px; text: "Search results"; clicked => { AppState.view-kind = 2; AppState.search-text = "Rust Slint"; AppState.page-title = "Results for “Rust Slint”"; AppState.page-subtitle = "Videos and playlists from YouTube"; } }
+            Button { min-width: 0px; text: "Playlists"; clicked => { AppState.view-kind = 3; AppState.page-title = "Your playlists"; AppState.page-subtitle = "Open a saved playlist or paste a playlist link"; AppState.videos = [{ id: "PL_mock_example", title: "Rust desktop development with a very long playlist name", channel: "Example channel", metadata: "24 videos", playlist: true }]; } }
+            Button { min-width: 0px; text: "Playlist videos"; clicked => { AppState.view-kind = 4; AppState.page-title = "Rust desktop development"; AppState.page-subtitle = "Playlist · PL_mock_example"; AppState.watch-note = "Watched labels reflect your YouTube history and progress."; AppState.videos = [{ id: "abcdefghijk", title: "Part one — getting started with Rust and Slint", channel: "Example channel", metadata: "12K views · 2 days ago", thumbnail: @image-url("mock-thumbnail.svg"), watched: 1, watch-progress: 35, duration: "12:34" }, { id: "lmnopqrstuv", title: "Part two — a very long video title that should wrap cleanly in the compact playlist list without hiding its metadata", channel: "Example channel", metadata: "8K views · 1 day ago", thumbnail: @image-url("mock-thumbnail.svg"), watched: 2, watch-progress: -1, duration: "18:20" }, { id: "abcdefghijk", title: "Part one again in the playlist", channel: "Example channel", metadata: "12K views · 2 days ago", thumbnail: @image-url("mock-thumbnail.svg"), watched: 1, watch-progress: 100, duration: "12:34" }]; } }
+        }
+        HorizontalLayout { min-width: 0px;
+            Button { min-width: 0px; text: "Video page"; clicked => { AppState.player-open = !AppState.player-open; AppState.player-title = "A video playing inside Slint"; AppState.player-texture = @image-url("mock-thumbnail.svg"); AppState.player-position = 146; AppState.player-duration = 3726; AppState.player-channel = "Workshop"; AppState.player-channel-initials = "W"; AppState.player-description = "A mock description for the redesigned player. It expands and collapses independently of live data."; AppState.breadcrumbs = [{id:"mock",title:"A video playing inside Slint",position:146}]; AppState.recommendations = [{id:"mock2",title:"Up next from the workshop",channel:"Workshop",initials:"W",tone:#3b4a63,thumbnail:@image-url("mock-thumbnail.svg"),metadata:"12K views · 1 day ago",duration:"12:34"}]; AppState.comments = [{id:"comment",author:"@viewer",initials:"V",text:"A comment to test the discussion layout",metadata:"2 hours ago",likes:"42",can-like:true,replies:3}]; } }
+            Button { min-width: 0px; text: "Settings"; clicked => { AppState.settings-open = !AppState.settings-open; AppState.player-open = false; } }
+            Button { min-width: 0px; text: "Channels"; clicked => { AppState.view-kind = 6; AppState.settings-open = false; AppState.videos = [{id: "UC_mock",title: "Linus Tech Tips",initials: "LT",tone: #4a3a3a,subscribed: true,metadata: "16.2M subscribers · Uploaded 2 hours ago"}, {id:"UC_other",title:"A channel with a very long name that should elide gracefully",initials:"AC",tone:#3b4a63,subscribed:true,metadata:"248K subscribers · Uploaded yesterday"}]; } }
+            Button { min-width: 0px; text: "Channel"; clicked => { AppState.view-kind = 8; AppState.settings-open = false; AppState.channel-name = "Linus Tech Tips"; AppState.channel-initials = "LT"; AppState.channel-meta = "@LinusTechTips · 16.2M subscribers · 7.4K videos"; AppState.channel-description = "We make entertaining videos about technology, including tech reviews, showcases and everything in between. This is deliberately long mock text to validate the expanded description."; AppState.channel-subscribed = true; AppState.channel-banner = @image-url("mock-thumbnail.svg"); AppState.videos = [{id:"abcdefghijk",title:"A technology video",channel:"Linus Tech Tips",initials:"LT",tone:#4a3a3a,metadata:"1.2M views · 2 days ago",duration:"16:24",thumbnail:@image-url("mock-thumbnail.svg")}]; AppState.sections = [{start:0,count:1}]; } }
+            Button { min-width: 0px; text: "Startup"; clicked => { AppState.initializing = !AppState.initializing; } }
+            Button { min-width: 0px; text: "Refreshing page"; clicked => { AppState.refreshing = !AppState.refreshing; AppState.busy = false; } }
+            Button { min-width: 0px; text: "Preview empty"; clicked => { AppState.videos = []; } }
+            Button { min-width: 0px; text: "Preview error"; clicked => { AppState.error = "The request failed. Check your connection and try again."; } }
+            Button { min-width: 0px; text: "Preview loading"; clicked => { AppState.busy = !AppState.busy; AppState.status = "Loading your feed…"; } }
+            Button { min-width: 0px; text: "Preview browser"; clicked => { AppState.setup-open = !AppState.setup-open; AppState.busy = false; AppState.error = ""; } }
+        }
+        AppContent {
+            switch-profile(index) => {
+                AppState.active-profile = index;
+                AppState.account-name = AppState.saved-profiles[index].name;
+                AppState.account-label = AppState.saved-profiles[index].label;
+                AppState.account-initial = AppState.saved-profiles[index].initials;
+                AppState.account-avatar = AppState.saved-profiles[index].avatar;
+                AppState.account-menu-open = false;
+            }
+        }
+    }
+}

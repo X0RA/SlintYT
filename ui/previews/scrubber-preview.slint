@@ -1,0 +1,16 @@
+import { Scrubber } from "../components/scrubber.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData } from "../state.slint";
+export component AppWindow inherits Window {
+    title: "Scrubber preview";
+    width: 560px; height: 220px; background: #000000;
+    private property <float> position: 250;
+    private property <float> volume: 70;
+    VerticalLayout { padding: 24px; spacing: 18px;
+        Scrubber { label: "Position"; maximum: 698; value: root.position; buffered: 400; changed(v) => { root.position = v; } released(v) => { root.position = v; } }
+        Scrubber { label: "Empty"; maximum: 0; value: 0; }
+        HorizontalLayout { alignment: start;
+            Scrubber { width: 72px; label: "Volume"; maximum: 100; thickness: 3px; fill: white; knob-always: false; value: root.volume; changed(v) => { root.volume = v; } }
+        }
+        Text { text: "Position " + round(root.position) + "s · volume " + round(root.volume); color: white; }
+    }
+}

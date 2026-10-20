@@ -1,0 +1,35 @@
+import { Button, Palette } from "std-widgets.slint";
+import { VideoFeed } from "../views/video-feed.slint";
+import { AppState } from "../state.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData } from "../state.slint";
+export component AppWindow inherits Window {
+    title: "Video feed preview";
+    width: 1100px; height: 760px; background: #0f0f0f;
+    init => {
+        Palette.color-scheme = ColorScheme.dark;
+        AppState.sections = [{start:0,count:3}];
+        AppState.watch-note = "Using cached watch history · 1273 watched videos. Refreshing recent watches…";
+        AppState.videos = [{ id: "abcdefghijk", title: "Building a desktop app with Rust and Slint", channel: "Example channel", metadata: "12K views · 2 days ago", duration: "24:10", watched: 1, watch-progress: 35 }, { id: "lmnopqrstuv", title: "A very long title that should wrap cleanly without hiding the channel or duration", channel: "Workshop", metadata: "3K views · 1 week ago", duration: "1:12:36", watched: 2, watch-progress: -1 }, { id: "12345678901", title: "Live from the studio", channel: "Studio", metadata: "Streaming now", duration: "LIVE", watched: 0, watch-progress: -1 }];
+    }
+    VerticalLayout {
+        padding: 24px; spacing: 16px;
+        HorizontalLayout {
+            Button { text: "History"; clicked => { AppState.view-kind = 1; AppState.page-title = "Watch history"; } }
+            Button { text: "Search"; clicked => { AppState.view-kind = 2; AppState.page-title = "Results for a long search query that should elide"; AppState.page-subtitle = "Videos and playlists from YouTube"; } }
+            Button { text: "Playlists"; clicked => { AppState.view-kind = 3; AppState.page-title = "Your playlists"; AppState.videos = [{ id: "PL_mock", title: "A playlist", channel: "Example", metadata: "3 videos", playlist: true }]; } }
+            Button { text: "Playlist"; clicked => { AppState.view-kind = 4; AppState.page-title = "A playlist"; AppState.videos = [{ id: "abcdefghijk", title: "Building a desktop app with Rust and Slint", channel: "Example channel", metadata: "12K views · 2 days ago", duration: "24:10", thumbnail: @image-url("mock-thumbnail.svg"), watched: 1, watch-progress: 35 }, { id: "lmnopqrstuv", title: "A very long title that should wrap cleanly without hiding the channel or duration", channel: "Workshop", metadata: "3K views · 1 week ago", duration: "1:12:36", thumbnail: @image-url("mock-thumbnail.svg"), watched: 2, watch-progress: -1 }]; } }
+            Button { text: "Repeated playlist entries"; clicked => { AppState.view-kind = 4; AppState.page-title = "Playlist with repeated videos"; AppState.videos = [{id:"abcdefghijk",title:"First occurrence",set-id:"first"},{id:"lmnopqrstuv",title:"Second video",set-id:"second"},{id:"abcdefghijk",title:"Repeated occurrence",set-id:"third"},{id:"12345678901",title:"Last video",set-id:"fourth"}]; } }
+            Button { text: "Empty"; clicked => { AppState.videos = []; AppState.error = ""; AppState.busy = false; } }
+            Button { text: "Loading"; clicked => { AppState.busy = !AppState.busy; AppState.status = "Loading recommendations…"; } }
+            Button { text: "Error"; clicked => { AppState.error = "YouTube could not be reached. Check your connection and retry."; AppState.busy = false; } }
+        }
+        HorizontalLayout {
+            Button { text: "Cached history"; clicked => { AppState.watch-note = "Using cached watch history · 1273 watched videos. Refreshing recent watches…"; AppState.videos[0].watched = 1; AppState.videos[1].watched = 0; } }
+            Button { text: "Reconcile history"; clicked => { AppState.watch-note = "Checking for watch history changes… 50 videos verified. Older cached statuses stay Unknown until checked."; AppState.videos[0].watched = 0; AppState.videos[1].watched = 0; } }
+            Button { text: "Refresh failed"; clicked => { AppState.watch-note = "History refresh incomplete. Unconfirmed statuses are Unknown."; } }
+            Button { text: "Refreshing page"; clicked => { AppState.refreshing = !AppState.refreshing; AppState.busy = false; } }
+            Button { text: "Cache unavailable"; clicked => { AppState.watch-note = "Watch history up to date. History could not be cached on this device; it will be checked again next time."; } }
+        }
+        VideoFeed {}
+    }
+}

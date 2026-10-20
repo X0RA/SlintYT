@@ -1,0 +1,171 @@
+import { ListView, Spinner } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { AppState } from "../state.slint";
+import { VideoCard } from "../components/video-card.slint";
+import { VideoRow } from "../components/video-row.slint";
+import { LibraryRow } from "../components/library-row.slint";
+import { ActionButton } from "../components/action-button.slint";
+import { Icon } from "../components/icon.slint";
+import { PillInput } from "../components/pill-input.slint";
+import { BackLink } from "../components/back-link.slint";
+import { ChannelHeader } from "channel-header.slint";
+// Loads the next page while the list is scrolled near its end. A timer rather than a
+// change handler, so a page too short to scroll keeps loading until it fills the view.
+component LoadMore {
+    in property <bool> near-end;
+    Timer {
+        interval: 250ms;
+        running: root.near-end && AppState.has-more && !AppState.busy && !AppState.refreshing && AppState.error == "";
+        triggered => { AppState.reload(true); }
+    }
+}
+export component VideoFeed inherits Rectangle {
+    // Height of the floating search bar area. Lists that start the page scroll under it.
+    in property <length> top-inset;
+    private property <bool> list-first: AppState.videos.length > 0 && AppState.error == ""
+        && (AppState.view-kind == 0 || AppState.view-kind == 1 || AppState.view-kind == 3);
+    // How far from the end of a list the next page starts loading.
+    private property <length> preload: 1200px;
+    private property <int> columns: max(1, min(4, floor((self.width - (AppState.view-kind == 1 && self.width > 700px ? 172px : 0px) + 20px) / (AppState.view-kind == 1 ? 270px : 310px))));
+    private property <bool> rows: AppState.view-kind == 3 || AppState.view-kind == 6 || (AppState.view-kind == 8 && AppState.channel-tab == 2);
+    private property <bool> history: AppState.view-kind == 1;
+    changed columns => { AppState.feed-columns = root.columns; AppState.reflow-feed(root.columns); }
+    init => { AppState.feed-columns = root.columns; AppState.reflow-feed(root.columns); }
+    background: Theme.background;
+    VerticalLayout {
+        spacing: 20px; padding-top: root.list-first ? 0px : root.top-inset;
+        if AppState.view-kind == 2 : Text { text: AppState.page-title; color: Theme.muted; font-size: 14px; }
+        if AppState.view-kind == 8 && AppState.channel-name != "" : ChannelHeader {}
+        if AppState.view-kind == 5 : HorizontalLayout { alignment: end;
+            ActionButton { height: 44px; text: "All channels  ›"; icon: "subscriptions"; clicked => { AppState.open-subscriptions(true); } }
+        }
+        if AppState.view-kind == 6 : VerticalLayout { spacing: 8px;
+            HorizontalLayout { alignment: start;
+                BackLink { text: "Latest uploads"; clicked => { AppState.open-subscriptions(false); } }
+            }
+            HorizontalLayout { spacing: 16px; cross-axis-alignment: center;
+                Text { horizontal-stretch: 1; text: AppState.channel-count(AppState.videos,"",true) + " subscriptions"; color: Theme.subtle; font-size: 14px; vertical-alignment: center; }
+                PillInput { width: min(260px, root.width / 2); icon: "search"; placeholder: "Filter channels"; text <=> AppState.channel-filter; }
+            }
+        }
+        if AppState.view-kind == 4 : VerticalLayout { spacing: 8px;
+            HorizontalLayout { alignment: start;
+                BackLink { text: "All playlists"; clicked => { AppState.open-playlists(); } }
+            }
+            HorizontalLayout { spacing: root.width < 800px ? 16px : 24px; cross-axis-alignment: center;
+                Rectangle { width: root.width < 800px ? 72px : 104px; height: self.width; border-radius: root.width < 800px ? 20px : 28px; background: AppState.current-playlist == "WL" ? #3a3025 : AppState.current-playlist == "LL" ? #3d2834 : #26303e;
+                    Icon { width: parent.width * 0.32; height: self.width; name: AppState.current-playlist == "WL" ? "clock" : AppState.current-playlist == "LL" ? "heart" : "playlist"; tint: #e4e4e7; }
+                }
+                VerticalLayout { horizontal-stretch: 1; alignment: center; spacing: 10px;
+                    Text { text: AppState.page-title; color: Theme.strong; font-size: root.width < 800px ? 30px : 40px; font-weight: 700; overflow: elide; }
+                    Text { text: AppState.videos.length + (AppState.videos.length == 1 ? " video" : " videos") + (AppState.current-playlist == "WL" ? " · Saved for later" : AppState.current-playlist == "LL" ? " · Videos you liked" : ""); color: Theme.muted; font-size: 14px; overflow: elide; }
+                }
+                HorizontalLayout { spacing: 10px; cross-axis-alignment: center;
+                    ActionButton { height: 48px; text: "Play all"; icon: "play"; icon-size: 16px; primary: true; enabled: AppState.videos.length > 0; clicked => { AppState.play-playlist(); } }
+                    ActionButton { height: 48px; icon: "shuffle"; tip: "Shuffle"; active: AppState.playlist-shuffle; outlined: true; clicked => { AppState.playlist-shuffle = !AppState.playlist-shuffle; } }
+                    ActionButton { height: 48px; icon: "link"; tip: "Copy playlist link"; outlined: true; clicked => { AppState.copy-link("https://www.youtube.com/playlist?list=" + AppState.current-playlist); } }
+                }
+            }
+            Rectangle { height: 16px; }
+        }
+        if AppState.error != "" : Rectangle { height: 60px; background: #301a1a; border-radius: 12px;
+            HorizontalLayout { padding: 14px; spacing: 16px;
+                Text { text: AppState.error; color: #ffaaa5; font-size: 13px; wrap: word-wrap; }
+                ActionButton { text: "Retry"; enabled: !AppState.busy; clicked => { AppState.reload(false); } }
+            }
+        }
+        if AppState.busy && AppState.videos.length == 0 : Rectangle {
+            VerticalLayout { alignment: center; spacing: 16px;
+                HorizontalLayout { alignment: center; Spinner { width: 26px; height: 26px; } }
+                Text { text: "Loading…"; color: Theme.subtle; font-size: 13px; horizontal-alignment: center; }
+            }
+        }
+        if AppState.videos.length == 0 && !AppState.busy && AppState.error == "" : Rectangle {
+            Text { text: AppState.view-kind == 4 ? "This playlist is empty." : AppState.view-kind == 6 ? "No subscriptions yet." : "Nothing to show yet."; color: Theme.muted; font-size: 17px; horizontal-alignment: center; vertical-alignment: center; }
+        }
+        if AppState.view-kind == 6 && AppState.channel-filter != "" && AppState.channel-count(AppState.videos,AppState.channel-filter,false) == 0 : Text { text: "No channels match."; color: Theme.subtle; horizontal-alignment: center; }
+        if root.rows && AppState.videos.length > 0 : Rectangle {
+          library-list := ListView {
+            width: parent.width; height: parent.height;
+            private property <int> reset: AppState.scroll-reset;
+            changed reset => { self.content-y = 0px; }
+            for item[index] in AppState.videos : Rectangle {
+                private property <length> lead: index == 0 && root.list-first ? root.top-inset : 0px;
+                // A `visible` binding on a ListView item breaks its stacking, so filtered rows collapse to zero height instead.
+                private property <bool> shown: AppState.channel-filter == "" || AppState.view-kind != 6 || AppState.matches(item.title, AppState.channel-filter);
+                width: library-list.width;
+                height: self.lead + (!self.shown ? 0px : root.width < 700px ? 89px : 105px);
+                clip: true;
+                LibraryRow {
+                    y: parent.lead; width: parent.width; height: parent.height - parent.lead;
+                    item: item; first: index == 0; channel: AppState.view-kind == 6; subscribed: item.subscribed;
+                    compact: root.width < 700px;
+                    activate => { if AppState.view-kind == 6 { AppState.open-channel(item.id, 0, 0, ""); } else { AppState.open-playlist(item.id); } }
+                }
+            }
+          }
+          LoadMore { near-end: -library-list.content-y + library-list.visible-height >= library-list.content-height - root.preload; }
+        }
+        if AppState.view-kind == 4 && AppState.videos.length > 0 : Rectangle {
+          playlist-list := ListView {
+            width: parent.width; height: parent.height;
+            private property <int> reset: AppState.scroll-reset;
+            changed reset => { self.content-y = 0px; }
+            for video[index] in AppState.videos : VideoRow { width: playlist-list.width; video: video; position: index + 1; first: index == 0; narrow: root.width < 800px; play-video(id, title) => { AppState.play-playlist-entry(index); } }
+          }
+          LoadMore { near-end: -playlist-list.content-y + playlist-list.visible-height >= playlist-list.content-height - root.preload; }
+        }
+        if !root.rows && AppState.view-kind != 4 && AppState.videos.length > 0 : Rectangle {
+          feed-list := ListView {
+            width: parent.width; height: parent.height;
+            private property <int> reset: AppState.scroll-reset;
+            changed reset => { self.content-y = 0px; }
+            for section[section-index] in AppState.sections : section-row := Rectangle {
+                // History lists each day beside a date column on wide windows; other grouped pages put the label above.
+                private property <bool> wide-history: root.history && root.width > 700px;
+                private property <bool> label-above: section.label != "" && !self.wide-history;
+                private property <bool> divided: root.history && section.label != "" && section-index > 0;
+                private property <length> lead: section-index == 0 && root.list-first ? root.top-inset : 0px;
+                private property <length> top: self.lead + (self.divided ? 22px : 0px) + (self.label-above ? 30px : 0px);
+                private property <length> date-width: self.wide-history ? 172px : 0px;
+                private property <length> card-width: (feed-list.width - self.date-width - 20px * (root.columns - 1)) / root.columns;
+                height: self.top + self.card-width * 9 / 16 + 39px + 24px;
+                if section-row.divided : Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: Theme.line; }
+                if section-row.wide-history && section.label != "" : VerticalLayout {
+                    x: 0px; y: parent.top; width: parent.date-width - 24px; alignment: start; spacing: 4px;
+                    Text { text: section.label; color: Theme.text; font-size: 14px; font-weight: 600; wrap: word-wrap; }
+                    Text { text: section.detail; color: Theme.subtle; font-size: 13px; }
+                }
+                if section-row.label-above : HorizontalLayout {
+                    x: 0px; y: parent.lead + (parent.divided ? 22px : 0px); width: parent.width; height: 24px; spacing: 8px; alignment: start;
+                    Text { text: section.label; color: root.history ? Theme.text : Theme.muted; font-size: 13px; font-weight: 600; vertical-alignment: center; }
+                    if root.history : Text { text: section.detail; color: Theme.subtle; font-size: 13px; vertical-alignment: center; }
+                }
+                HorizontalLayout { x: parent.date-width; y: parent.top; width: parent.width - parent.date-width; height: parent.card-width * 9 / 16 + 39px; spacing: 20px;
+                    for col in root.columns : VideoCard {
+                        width: parent.width / root.columns - 20px * (root.columns - 1) / root.columns;
+                        visible: col < section.count;
+                        video: AppState.videos[section.start + col];
+                        show-watched: !root.history; compact: root.history;
+                        channel-links: AppState.view-kind != 8;
+                        open-playlist(id) => { AppState.open-playlist(id); }
+                        play-video(id, title) => { AppState.play-video(id, title); }
+                    }
+                }
+            }
+          }
+          LoadMore { near-end: -feed-list.content-y + feed-list.visible-height >= feed-list.content-height - root.preload; }
+        }
+    }
+    // Shown while the next page loads under the existing rows.
+    if AppState.busy && AppState.videos.length > 0 : Rectangle {
+        x: (parent.width - self.width) / 2; y: parent.height - self.height - 16px;
+        width: loading-layout.preferred-width; height: 40px; border-radius: 20px;
+        background: #18181bf0; border-width: 1px; border-color: Theme.border;
+        drop-shadow-color: #00000080; drop-shadow-blur: 16px; drop-shadow-offset-y: 6px;
+        loading-layout := HorizontalLayout { padding-left: 14px; padding-right: 16px; spacing: 10px; alignment: center; cross-axis-alignment: center;
+            Spinner { width: 18px; height: 18px; }
+            Text { text: "Loading…"; color: Theme.text; font-size: 13px; vertical-alignment: center; }
+        }
+    }
+}

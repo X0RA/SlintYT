@@ -1,0 +1,38 @@
+import { Theme } from "../theme.slint";
+import { Icon } from "icon.slint";
+// Rounded text field used for filters, channel search, comments, and replies.
+export component PillInput inherits Rectangle {
+    in property <string> placeholder;
+    in property <string> icon;
+    in property <bool> enabled: true;
+    in-out property <string> text;
+    callback accepted(string);
+    callback edited(string);
+    public function focus-input() { field.focus(); }
+    out property <bool> has-focus: field.has-focus;
+    height: 40px;
+    min-width: 120px;
+    border-radius: self.height / 2;
+    border-width: 1px;
+    border-color: field.has-focus ? #3a3a44 : #26262c;
+    background: Theme.surface;
+    opacity: root.enabled ? 1 : 0.5;
+    forward-focus: field;
+    HorizontalLayout {
+        padding-left: root.icon == "" ? 16px : 14px; padding-right: 16px; spacing: 8px;
+        cross-axis-alignment: center;
+        if root.icon != "" : Icon { name: root.icon; width: 16px; height: 16px; tint: Theme.subtle; }
+        Rectangle {
+            horizontal-stretch: 1; height: root.height;
+            if root.text == "" : Text { x: 0px; width: parent.width; height: parent.height; text: root.placeholder; color: Theme.subtle; font-size: 14px; vertical-alignment: center; overflow: elide; }
+            field := TextInput {
+                x: 0px; width: parent.width; height: parent.height;
+                text <=> root.text; enabled: root.enabled; single-line: true;
+                color: Theme.text; font-size: 14px; vertical-alignment: center;
+                accessible-label: root.placeholder;
+                accepted => { root.accepted(self.text); }
+                edited => { root.edited(self.text); }
+            }
+        }
+    }
+}

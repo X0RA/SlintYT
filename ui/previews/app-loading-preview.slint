@@ -1,0 +1,7 @@
+import { AppLoading } from "../components/app-loading.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData } from "../state.slint";
+export component AppWindow inherits Window {
+    title: "Startup loading preview";
+    width: 720px; height: 650px;
+    AppLoading { message: "Connecting to YouTube…"; }
+}

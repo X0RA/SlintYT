@@ -1,0 +1,18 @@
+import { Theme } from "../theme.slint";
+import { Icon } from "icon.slint";
+// "‹ Label" link used to step back to a parent page.
+export component BackLink inherits Rectangle {
+    in property <string> text;
+    callback clicked();
+    width: layout.preferred-width;
+    height: 40px;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => { root.clicked(); }
+    layout := HorizontalLayout {
+        spacing: 6px; cross-axis-alignment: center;
+        Icon { name: "chevron-left"; width: 16px; height: 16px; tint: touch.has-hover ? Theme.text : Theme.muted; }
+        Text { text: root.text; color: touch.has-hover ? Theme.text : Theme.muted; font-size: 14px; vertical-alignment: center; }
+    }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}

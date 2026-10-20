@@ -1,0 +1,293 @@
+import { Spinner, ScrollView } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { AppState } from "../state.slint";
+import { ActionButton } from "../components/action-button.slint";
+import { Icon } from "../components/icon.slint";
+import { MenuItem, MenuSurface } from "../components/menu-item.slint";
+import { Scrubber } from "../components/scrubber.slint";
+import { VideoDetails } from "video-details.slint";
+
+// Round translucent button floating over the video.
+component GlassButton inherits Rectangle {
+    in property <string> icon;
+    in property <string> tip;
+    callback clicked();
+    width: 44px; height: 44px; border-radius: 22px;
+    background: touch.has-hover ? #28282dcc : #18181b99;
+    accessible-role: button; accessible-label: root.tip; accessible-action-default => { root.clicked(); }
+    Icon { name: root.icon; width: 20px; height: 20px; tint: Theme.strong; }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+// Player control: a 44px circle with an icon, or a pill with short text (speed, quality).
+component ControlButton inherits Rectangle {
+    in property <string> icon;
+    in property <string> text;
+    in property <string> tip;
+    in property <bool> enabled: true;
+    in property <bool> active: false;
+    in property <bool> pressed-state: false;
+    callback clicked();
+    callback right-clicked();
+    width: root.icon != "" ? 44px : max(44px, min(label.preferred-width + 16px, 120px));
+    height: 44px; border-radius: 22px;
+    opacity: root.enabled ? 1 : 0.4;
+    background: (touch.has-hover && root.enabled) || root.active ? #ffffff1a : transparent;
+    accessible-role: button; accessible-label: root.tip; accessible-action-default => { if root.enabled { root.clicked(); } }
+    if root.icon != "" : Icon { name: root.icon; width: 22px; height: 22px; tint: root.pressed-state ? Theme.accent : white; }
+    label := Text { visible: root.icon == ""; x: (parent.width - self.width) / 2; width: min(self.preferred-width, parent.width - 16px); text: root.text; color: white; font-size: 13px; font-weight: 600; vertical-alignment: center; horizontal-alignment: center; overflow: elide; }
+    touch := TouchArea { enabled: root.enabled; mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+        pointer-event(event) => { if event.button == PointerEventButton.right && event.kind == PointerEventKind.up { root.right-clicked(); } }
+    }
+}
+
+// One breadcrumb: a chevron separator followed by a clickable label. The current video is bold and inert.
+component Crumb inherits Rectangle {
+    in property <string> text;
+    in property <string> tip: root.text;
+    in property <bool> current: false;
+    in property <bool> separator: !root.first;
+    in property <bool> first: false;
+    in property <bool> shown: true;
+    in property <length> limit: 220px;
+    callback clicked();
+    width: root.shown ? layout.preferred-width : 0px;
+    height: 44px;
+    visible: root.shown;
+    accessible-role: button; accessible-label: root.tip; accessible-enabled: !root.current; accessible-action-default => { if !root.current { root.clicked(); } }
+    layout := HorizontalLayout { spacing: 2px; cross-axis-alignment: center;
+        if root.separator : Rectangle { width: 18px; height: 18px; Icon { name: "chevron"; width: 14px; height: 14px; tint: #71717a; } }
+        Rectangle {
+            width: min(label.preferred-width, root.limit) + 16px; height: 30px; border-radius: 8px;
+            background: touch.has-hover && !root.current ? #ffffff1a : transparent;
+            label := Text { x: 8px; width: parent.width - 16px; text: root.text; color: root.current || touch.has-hover ? white : #c4c4cc; font-size: 13px; font-weight: root.current ? 600 : 400; vertical-alignment: center; overflow: elide; }
+            touch := TouchArea { enabled: !root.current; mouse-cursor: pointer; clicked => { root.clicked(); } }
+        }
+    }
+}
+export component VideoPlayer inherits Rectangle {
+    callback close(); callback toggle(); callback seek(float); callback volume-changed(float);
+    callback toggle-fullscreen(); callback retry(); callback select-quality(int); callback select-subtitle(int);
+    private property <bool> seeking: false;
+    private property <float> seek-position;
+    private property <bool> controls-visible: true;
+    private property <int> menu: 0;
+    private property <bool> playable: !AppState.player-loading && AppState.player-error == "";
+    private property <bool> narrow: root.width < 700px;
+    private property <bool> chrome: !AppState.player-fullscreen && !AppState.player-pip;
+    // Keep the current video plus the one before it visible; earlier crumbs collapse into "…".
+    private property <int> hidden-crumbs: max(0, AppState.breadcrumbs.length - (root.narrow ? 1 : 2));
+    private property <bool> overlay: root.controls-visible || AppState.player-paused || root.menu != 0 || !root.playable || bottom-touch.has-hover || top-touch.has-hover;
+    pure function pad(value: int) -> string { return (value < 10 ? "0" : "") + value; }
+    pure function clock(seconds: float) -> string {
+        let total = floor(max(0, seconds));
+        return total >= 3600 ? floor(total / 3600) + ":" + root.pad(mod(floor(total / 60), 60)) + ":" + root.pad(mod(total, 60)) : floor(total / 60) + ":" + root.pad(mod(total, 60));
+    }
+    function show-controls() { root.controls-visible = true; hide-controls.restart(); }
+    function subtitles() {
+        root.show-controls();
+        if AppState.player-subtitle-index > 0 && !AppState.player-subtitles-loading {
+            root.select-subtitle(0);
+        } else {
+            root.menu = root.menu == 3 ? 0 : 3;
+        }
+    }
+    background: black;
+    forward-focus: keys;
+    init => { keys.focus(); }
+    keys := FocusScope {
+        // More comments load as the page nears its end, the same way the feeds do.
+        Timer {
+            interval: 250ms;
+            running: AppState.player-detail-tab == 1 && AppState.comments-more && !AppState.comments-loading && !AppState.details-loading && AppState.comments-error == ""
+                && -page.content-y + page.visible-height >= page.content-height - 900px;
+            triggered => { AppState.load-comments(AppState.comments-newest, true); }
+        }
+        page := ScrollView {
+            content-width: root.width;
+            horizontal-scrollbar-policy: always-off;
+            vertical-scrollbar-policy: AppState.player-fullscreen || AppState.player-pip ? always-off : as-needed;
+            private property <int> reset: AppState.scroll-reset;
+            changed reset => { self.content-y = 0px; root.menu = 0; root.show-controls(); }
+            changed content-y => { root.menu = 0; AppState.dismiss-popovers += 1; }
+            VerticalLayout { spacing: 0px; min-width: 0px; width: root.width;
+                picture := Rectangle {
+                    height: root.height; background: black;
+                    Image { width: parent.width; height: parent.height; source: AppState.player-texture; image-fit: contain; }
+                    changed width => { AppState.player-width = self.width / 1px; }
+                    changed height => { AppState.player-height = self.height / 1px; }
+                    surface := TouchArea {
+                        mouse-cursor: root.overlay ? default : none;
+                        changed mouse-x => { root.show-controls(); }
+                        changed mouse-y => { root.show-controls(); }
+                        moved => { root.show-controls(); }
+                        clicked => { if root.menu != 0 { root.menu = 0; } else if root.playable { root.toggle(); } }
+                        double-clicked => { root.toggle-fullscreen(); }
+                    }
+                    if AppState.player-loading || AppState.player-buffering : Rectangle {
+                        background: #00000055;
+                        VerticalLayout { alignment: center; spacing: 16px;
+                            HorizontalLayout { alignment: center; Spinner { width: 32px; height: 32px; } }
+                            Text { text: AppState.player-loading ? "Loading video…" : "Buffering…"; color: white; font-size: 14px; horizontal-alignment: center; }
+                        }
+                    }
+                    if AppState.player-error != "" : Rectangle {
+                        background: #101010ee;
+                        VerticalLayout { padding: 32px; alignment: center; spacing: 20px;
+                            Text { text: AppState.player-error; color: #ffaaa5; font-size: 15px; horizontal-alignment: center; wrap: word-wrap; }
+                            HorizontalLayout { alignment: center; ActionButton { text: "Retry"; clicked => { root.retry(); } } }
+                        }
+                    }
+                    if root.overlay : Rectangle {
+                        x: 0px; y: 0px; width: parent.width; height: 150px;
+                        background: @linear-gradient(180deg, #000000a6, #00000000);
+                    }
+                    top := Rectangle {
+                        x: root.narrow ? 12px : 20px; y: 18px; width: parent.width - self.x * 2; height: 44px;
+                        visible: root.overlay;
+                        top-touch := TouchArea { moved => { root.show-controls(); } }
+                        HorizontalLayout { spacing: 10px; alignment: start; cross-axis-alignment: center;
+                            GlassButton { icon: "sidebar"; tip: "Open navigation"; clicked => { AppState.player-sidebar-open = !AppState.player-sidebar-open; } }
+                            Rectangle {
+                                width: min(crumbs.preferred-width, top.width - 54px); height: 44px; clip: true;
+                                background: #18181b99; border-radius: 22px;
+                                crumbs := HorizontalLayout { padding-left: 4px; padding-right: 8px; spacing: 0px; alignment: start; cross-axis-alignment: center;
+                                    Rectangle { width: 36px; height: 36px; border-radius: 18px; background: back-touch.has-hover ? #ffffff1a : transparent;
+                                        accessible-role: button; accessible-label: "Go back"; accessible-action-default => { root.close(); }
+                                        Icon { name: "back"; width: 18px; height: 18px; tint: Theme.strong; }
+                                        back-touch := TouchArea { mouse-cursor: pointer; clicked => { root.close(); } }
+                                    }
+                                    Rectangle { width: 9px; height: 18px; Rectangle { x: 2px; width: 1px; height: 18px; background: #ffffff2e; } }
+                                    Crumb { text: AppState.player-origin; separator: false; clicked => { AppState.player-close(); } }
+                                    if root.hidden-crumbs > 0 : Crumb { text: "…"; tip: "Show hidden videos"; clicked => { root.menu = root.menu == 4 ? 0 : 4; } }
+                                    for crumb[index] in AppState.breadcrumbs : Crumb {
+                                        shown: index >= root.hidden-crumbs;
+                                        text: crumb.title; current: index == AppState.breadcrumbs.length - 1;
+                                        limit: root.narrow ? 110px : self.current ? 320px : 220px;
+                                        clicked => { AppState.player-breadcrumb(index); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if AppState.player-progress-note != "" && root.overlay : Text {
+                        x: 24px; y: 70px; width: parent.width - 48px;
+                        text: AppState.player-progress-note; color: #ffcf8a; font-size: 12px; wrap: word-wrap;
+                        accessible-role: text; accessible-label: self.text;
+                    }
+                    bottom := Rectangle {
+                        y: parent.height - self.height; width: parent.width; height: 260px;
+                        visible: root.overlay;
+                        background: @linear-gradient(180deg, #00000000, #000000d9);
+                        bottom-touch := TouchArea { moved => { root.show-controls(); } }
+                        VerticalLayout {
+                            padding-left: root.narrow ? 14px : 28px; padding-right: root.narrow ? 14px : 28px; padding-bottom: 12px;
+                            spacing: 0px; alignment: end;
+                            HorizontalLayout { spacing: 12px; alignment: start; padding-bottom: 14px;
+                                Text { text: AppState.player-title; color: white; font-size: root.narrow ? 16px : 20px; font-weight: 600; overflow: elide; vertical-alignment: center; }
+                                if !root.narrow && AppState.player-channel != "" : Rectangle {
+                                    width: channel-link.preferred-width; horizontal-stretch: 0;
+                                    channel-link := Text { x: 0px; y: (parent.height - self.height) / 2 + 2px; text: AppState.player-channel; color: channel-touch.has-hover ? white : #c4c4cc; font-size: 14px; }
+                                    channel-touch := TouchArea { enabled: AppState.player-channel-id != ""; mouse-cursor: pointer; clicked => { AppState.open-channel(AppState.player-channel-id,0,0,""); } }
+                                }
+                            }
+                            Scrubber {
+                                label: "Playback position"; maximum: max(1, AppState.player-duration);
+                                value: root.seeking ? root.seek-position : AppState.player-position;
+                                buffered: AppState.player-buffered;
+                                enabled: root.playable && AppState.player-duration > 0;
+                                changed(value) => { root.seek-position = value; root.seeking = true; root.show-controls(); }
+                                released(value) => { root.seek(value); AppState.player-position = value; root.seeking = false; }
+                            }
+                            HorizontalLayout { padding-top: 6px; spacing: 2px; cross-axis-alignment: center;
+                                toggle := ControlButton { icon: AppState.player-paused || AppState.player-ended ? "play" : "pause"; tip: AppState.player-paused ? "Play" : "Pause"; enabled: root.playable; clicked => { root.toggle(); } }
+                                ControlButton { icon: "next"; tip: "Next video"; clicked => { AppState.player-next(); } }
+                                ControlButton { icon: AppState.player-muted ? "mute" : "volume"; tip: AppState.player-muted ? "Unmute" : "Mute"; clicked => { AppState.player-toggle-mute(); } }
+                                if !root.narrow : Rectangle { width: 82px; height: 44px;
+                                    Scrubber { x: 0px; width: 72px; label: "Volume"; maximum: 100; thickness: 3px; fill: white; knob-always: false;
+                                        value: AppState.player-muted ? 0 : AppState.player-volume;
+                                        changed(value) => { AppState.player-volume = value; root.volume-changed(value); }
+                                        released(value) => { AppState.player-volume = value; root.volume-changed(value); }
+                                    }
+                                }
+                                Rectangle { width: time.preferred-width + 8px; height: 44px;
+                                    time := Text { x: 4px; text: root.clock(AppState.player-position) + " / " + (AppState.player-duration > 0 ? root.clock(AppState.player-duration) : "LIVE"); color: #e4e4e7; font-size: 13px; vertical-alignment: center; }
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                                ControlButton { text: AppState.player-speed + "×"; tip: "Playback speed"; active: root.menu == 1; clicked => { root.menu = root.menu == 1 ? 0 : 1; } }
+                                ControlButton { text: AppState.player-qualities-loading && AppState.player-quality-index == 0 ? "Auto" : AppState.player-quality-index == 0 ? "Auto" : AppState.player-qualities[AppState.player-quality-index]; tip: "Video quality"; active: root.menu == 2; clicked => { root.menu = root.menu == 2 ? 0 : 2; } }
+                                subtitles := ControlButton { icon: "subtitles"; tip: AppState.player-subtitle-index > 0 ? "Turn subtitles off (right-click for languages)" : "Choose subtitles"; pressed-state: AppState.player-subtitle-index > 0; active: root.menu == 3;
+                                    clicked => { root.subtitles(); }
+                                    right-clicked => { root.menu = root.menu == 3 ? 0 : 3; }
+                                }
+                                fullscreen := ControlButton { icon: "fullscreen"; tip: "Fullscreen"; clicked => { root.toggle-fullscreen(); } }
+                            }
+                        }
+                        // Sits centred in the control row rather than taking a row of its own.
+                        if root.chrome && !root.narrow : Rectangle {
+                            x: (parent.width - self.width) / 2; y: parent.height - 12px - 44px + (44px - self.height) / 2;
+                            width: hint.preferred-width + 24px; height: 32px;
+                            accessible-role: button; accessible-label: "More below"; accessible-action-default => { page.content-y = -root.height; }
+                            hint := HorizontalLayout { alignment: center; spacing: 6px; cross-axis-alignment: center;
+                                Text { text: "More below"; color: hint-touch.has-hover ? white : Theme.muted; font-size: 12px; font-weight: 500; vertical-alignment: center; }
+                                Icon { name: "down"; width: 14px; height: 14px; tint: hint-touch.has-hover ? white : Theme.muted; }
+                            }
+                            hint-touch := TouchArea { mouse-cursor: pointer; clicked => { page.content-y = -root.height; } }
+                        }
+                    }
+                    if root.menu != 0 : MenuSurface {
+                        private property <length> wanted: root.menu == 2 ? 380px : root.menu == 4 || root.menu == 3 ? 320px : 200px;
+                        width: min(self.wanted, parent.width - 24px);
+                        height: min(parent.height - 160px, menu-layout.preferred-height);
+                        x: root.menu == 4 ? min(parent.width - self.width - 12px, 140px) : max(12px, parent.width - self.width - (root.narrow ? 14px : 28px));
+                        y: root.menu == 4 ? 70px : max(70px, parent.height - self.height - 96px);
+                        clip: true;
+                        TouchArea {}
+                        ScrollView { horizontal-scrollbar-policy: always-off;
+                            menu-layout := VerticalLayout { padding: 6px; spacing: 0px;
+                                if root.menu == 1 : VerticalLayout { for speed in [0.25,0.5,0.75,1,1.25,1.5,1.75,2] : MenuItem { text: speed + "×"; checked: AppState.player-speed == speed; clicked => { AppState.player-set-speed(speed); root.menu = 0; } } }
+                                if root.menu == 2 : VerticalLayout {
+                                    if AppState.player-qualities-loading : Text { height: 30px; x: 12px; text: "Loading more formats…"; color: Theme.subtle; font-size: 11px; vertical-alignment: center; }
+                                    if AppState.player-quality-note != "" : Text { x: 12px; text: AppState.player-quality-note; color: Theme.subtle; font-size: 11px; wrap: word-wrap; }
+                                    for label[index] in AppState.player-qualities : MenuItem { text: label; detail: AppState.player-quality-details[index]; checked: AppState.player-quality-index == index; clicked => { root.select-quality(index); root.menu = 0; } }
+                                }
+                                if root.menu == 3 : VerticalLayout {
+                                    if AppState.player-subtitles-loading : Text {
+                                        text: "Loading subtitles…"; color: Theme.subtle; font-size: 12px; height: 32px;
+                                        accessible-role: text; accessible-label: self.text;
+                                    }
+                                    if AppState.player-subtitle-note != "" : Text {
+                                        text: AppState.player-subtitle-note; color: Theme.subtle; font-size: 12px; wrap: word-wrap;
+                                        accessible-role: text; accessible-label: self.text;
+                                    }
+                                    for label[index] in AppState.player-subtitles : MenuItem {
+                                        text: label; checked: AppState.player-subtitle-index == index;
+                                        opacity: AppState.player-subtitles-loading || !root.playable ? 0.45 : 1;
+                                        accessible-enabled: !AppState.player-subtitles-loading && root.playable;
+                                        clicked => { if !AppState.player-subtitles-loading && root.playable { root.select-subtitle(index); } }
+                                    }
+                                }
+                                if root.menu == 4 : VerticalLayout { for crumb[index] in AppState.breadcrumbs : VerticalLayout { if index < root.hidden-crumbs : MenuItem { text: crumb.title; clicked => { AppState.player-breadcrumb(index); root.menu = 0; } } } }
+                            }
+                        }
+                    }
+                }
+                if !AppState.player-fullscreen && !AppState.player-pip : VideoDetails {}
+            }
+        }
+        hide-controls := Timer { interval: 3000ms; running: true; triggered => { if !root.seeking && surface.mouse-y > 80px && surface.mouse-y < picture.height - 230px { root.controls-visible = false; } } }
+        KeyBinding { keys: @keys(Space); enabled: root.playable; activated => { root.toggle(); root.show-controls(); } }
+        KeyBinding { keys: @keys(K); enabled: root.playable; activated => { root.toggle(); root.show-controls(); } }
+        KeyBinding { keys: @keys(F); activated => { root.toggle-fullscreen(); } }
+        KeyBinding { keys: @keys(M); activated => { AppState.player-toggle-mute(); } }
+        KeyBinding { keys: @keys(C); activated => { root.subtitles(); } }
+        KeyBinding { keys: @keys(LeftArrow); activated => { root.seek(max(0,AppState.player-position - 5)); root.show-controls(); } }
+        KeyBinding { keys: @keys(RightArrow); activated => { root.seek(AppState.player-position + 5); root.show-controls(); } }
+        KeyBinding { keys: @keys(J); activated => { root.seek(max(0,AppState.player-position - 10)); } }
+        KeyBinding { keys: @keys(L); activated => { root.seek(AppState.player-position + 10); } }
+        KeyBinding { keys: @keys(UpArrow); enabled: page.content-y >= -1px; activated => { root.volume-changed(min(100,AppState.player-volume + 5)); } }
+        KeyBinding { keys: @keys(DownArrow); enabled: page.content-y >= -1px; activated => { root.volume-changed(max(0,AppState.player-volume - 5)); } }
+        KeyBinding { keys: @keys(Escape); activated => { if root.menu != 0 { root.menu = 0; } else if AppState.player-sidebar-open { AppState.player-sidebar-open = false; } else if AppState.player-fullscreen { root.toggle-fullscreen(); } else if AppState.player-pip { AppState.player-toggle-pip(); } else { root.close(); } } }
+    }
+}

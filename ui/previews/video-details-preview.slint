@@ -1,0 +1,31 @@
+import { VideoDetails } from "../views/video-details.slint";
+import { AppState } from "../state.slint";
+import { Button, Palette, ScrollView } from "std-widgets.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData } from "../state.slint";
+export component AppWindow inherits Window {
+    title: "video-details preview"; preferred-width: 1100px; height: 760px; min-width: 480px; background: #0e0e10;
+    init => {
+        Palette.color-scheme = ColorScheme.dark;
+        AppState.player-rich-description = @markdown("A mock description with a [website](https://example.com), a timestamp and multiple lines.\n\nThis preview works without backend callbacks.");
+        AppState.initializing = false; AppState.player-detail-tab = 1;
+        AppState.channel-name = "Linus Tech Tips"; AppState.channel-initials = "LT";
+        AppState.channel-meta = "@LinusTechTips · 16.2M subscribers · 7.4K videos";
+        AppState.channel-description = "We make entertaining videos about technology. This mock description covers long text and expansion without relying on a live service.";
+        AppState.channel-banner = @image-url("mock-thumbnail.svg");
+        AppState.player-channel = "Linus Tech Tips"; AppState.player-channel-initials = "LT";
+        AppState.player-stats = "1.2M views · 2 days ago";
+        AppState.player-description = "This is a standalone video details preview.\nA longer description can expand and collapse.\nA third line of mock text.\nMore text to inspect the expanded state.";
+        AppState.comments = [{id:"mock",author:"@viewer",initials:"V",text:"A thoughtful comment with enough text to test wrapping across the available width.",metadata:"2 hours ago",likes:"42",can-like:true,replies:3}];
+        AppState.recommendations = [{id:"abcdefghijk",title:"A recommended video",channel:"Workshop",initials:"W",metadata:"12K views · 1 day ago",duration:"12:34",thumbnail:@image-url("mock-thumbnail.svg")}];
+    }
+    VerticalLayout {
+        HorizontalLayout {
+            Button { text: "More replies available"; clicked => { AppState.comments = [{id:"mock",author:"@viewer",initials:"V",text:"A thread with another page of replies.",replies:3,expanded:true,token:"next-page"},{id:"reply",author:"@reply",initials:"R",text:"First loaded reply",indent:1}]; } }
+            Button { text: "All replies loaded"; clicked => { AppState.comments = [{id:"mock",author:"@viewer",initials:"V",text:"All replies loaded.",replies:1,expanded:true},{id:"reply",author:"@reply",initials:"R",text:"Loaded reply",indent:1}]; } }
+            Button { text: "Loading"; clicked => { AppState.comments-loading = !AppState.comments-loading; } }
+            Button { text: "Error"; clicked => { AppState.comments-error = "Could not load replies. Please retry."; AppState.comments-loading = false; } }
+            Button { text: "Empty"; clicked => { AppState.comments = []; AppState.comments-error = ""; AppState.comments-loading = false; } }
+        }
+        ScrollView { horizontal-scrollbar-policy: always-off; VideoDetails {} }
+    }
+}

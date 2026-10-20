@@ -1,0 +1,71 @@
+import { Theme } from "../theme.slint";
+import { AppState, VideoData } from "../state.slint";
+import { Icon } from "icon.slint";
+import { Avatar } from "avatar.slint";
+import { ActionButton } from "action-button.slint";
+export component VideoRow inherits Rectangle {
+    in property <VideoData> video;
+    in property <int> position;
+    in property <bool> enabled: true;
+    // The first row also draws the list's top border.
+    in property <bool> first: false;
+    callback play-video(string, string);
+    private property <length> drag-start;
+    private property <bool> handle-hit: false;
+    in property <bool> narrow: false;
+    private property <length> thumb-width: root.narrow ? 120px : 192px;
+    height: root.thumb-width * 9 / 16 + 32px;
+    background: touch.has-hover ? #121215 : transparent;
+    accessible-role: groupbox; accessible-label: root.video.title; accessible-action-default => { root.play-video(root.video.id, root.video.title); }
+    if root.first : Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: Theme.row; }
+    Rectangle { x: 0px; y: parent.height - 1px; width: parent.width; height: 1px; background: Theme.row; }
+    touch := TouchArea { enabled: root.enabled; mouse-cursor: pointer;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down { root.drag-start = self.mouse-y; root.handle-hit = !root.narrow && self.mouse-x < 28px; }
+            if event.kind == PointerEventKind.up && root.handle-hit && root.video.set-id != "" && abs(self.mouse-y - root.drag-start) > root.height / 2 {
+                AppState.edit-playlist(root.position - 1, min(AppState.videos.length - 1, max(0, root.position - 1 + round((self.mouse-y - root.drag-start) / root.height))));
+            }
+        }
+        clicked => { if !root.handle-hit { root.play-video(root.video.id, root.video.title); } }
+    }
+    HorizontalLayout {
+        spacing: 4px; cross-axis-alignment: center;
+        if !root.narrow : Rectangle { width: 28px; height: 28px;
+            Icon { name: "drag"; width: 16px; height: 16px; tint: touch.has-hover ? Theme.subtle : #3f3f46; }
+        }
+        HorizontalLayout {
+            horizontal-stretch: 1; padding-left: 8px; padding-right: 8px; spacing: root.narrow ? 12px : 20px; cross-axis-alignment: center;
+            Text { text: root.position; color: #71717a; font-size: 14px; width: 22px; horizontal-alignment: right; vertical-alignment: center; }
+            Rectangle {
+                width: root.thumb-width; height: self.width * 9 / 16; border-radius: 12px; clip: true; background: Theme.raised;
+                Image { source: root.video.thumbnail; width: parent.width; height: parent.height; image-fit: cover; }
+                if root.video.duration != "" : Rectangle {
+                    x: parent.width - self.width - 8px; y: parent.height - self.height - 9px;
+                    width: duration.preferred-width + 12px; height: 20px; background: #0a0a0bc7; border-radius: 5px;
+                    duration := Text { text: root.video.duration; color: white; font-size: 11px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+                }
+                if root.video.watch-progress > 0 : Rectangle {
+                    x: 0px; y: parent.height - 3px; width: parent.width; height: 3px; background: #ffffff33;
+                    Rectangle { x: 0px; y: 0px; width: parent.width * min(100, root.video.watch-progress) / 100; height: parent.height; background: Theme.accent; }
+                }
+            }
+            VerticalLayout {
+                horizontal-stretch: 1; alignment: center; spacing: 10px;
+                Text { text: root.video.title; color: Theme.text; font-size: root.narrow ? 14px : 16px; font-weight: 500; wrap: word-wrap; overflow: elide; max-height: root.narrow ? 40px : 45px; }
+                HorizontalLayout {
+                    spacing: 8px; alignment: start; cross-axis-alignment: center;
+                    if root.video.channel != "" : Avatar { width: 22px; initials: root.video.initials; tone: root.video.tone; url: root.video.avatar; clickable: root.video.channel-id != ""; label: "Open channel " + root.video.channel; clicked => { AppState.open-channel(root.video.channel-id, 0, 0, ""); } }
+                    if root.video.channel != "" : Rectangle {
+                        width: channel-name.preferred-width; height: 20px;
+                        channel-name := Text { x: 0px; text: root.video.channel; color: channel-touch.has-hover ? white : #c4c4cc; font-size: 13px; font-weight: 500; vertical-alignment: center; overflow: elide; }
+                        channel-touch := TouchArea { enabled: root.video.channel-id != ""; mouse-cursor: pointer; clicked => { AppState.open-channel(root.video.channel-id, 0, 0, ""); } }
+                    }
+                    if root.video.channel != "" && root.video.metadata != "" : Rectangle { width: 3px; height: 3px; border-radius: 1.5px; background: #52525b; }
+                    Text { horizontal-stretch: 1; text: root.video.metadata; color: Theme.subtle; font-size: 13px; vertical-alignment: center; overflow: elide; }
+                }
+            }
+        }
+        if root.video.set-id != "" : ActionButton { icon: "close"; icon-size: 18px; tip: "Remove from playlist"; quiet: true; enabled: !AppState.action-busy; clicked => { AppState.edit-playlist(root.position - 1, -1); } }
+    }
+    if touch.pressed && root.handle-hit : Rectangle { x: 0px; y: touch.mouse-y > root.drag-start ? parent.height - 2px : 0px; height: 2px; width: parent.width; background: Theme.accent; }
+}

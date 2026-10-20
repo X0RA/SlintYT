@@ -1,0 +1,30 @@
+import { VideoCard } from "../components/video-card.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData } from "../state.slint";
+export component AppWindow inherits Window {
+    title: "Video card preview";
+    width: 900px; height: 1190px; background: #0f0f0f;
+    private property <string> last-opened;
+    private property <length> card-width: (root.width - 66px) / 2;
+    VerticalLayout {
+        padding: 24px; spacing: 18px;
+        HorizontalLayout {
+            height: root.card-width * 9 / 16 + 124px;
+            spacing: 18px;
+            VideoCard { width: root.card-width; video: { id: "abcdefghijk", title: "A few minutes watched · 15%", channel: "Example channel", metadata: "Partial progress", duration: "1:02:36", watched: 1, watch-progress: 15, thumbnail: @image-url("mock-thumbnail.svg") }; play-video(id, title) => { root.last-opened = "video " + id; } }
+            VideoCard { width: root.card-width; video: { id: "lmnopqrstuv", title: "Completed · 100%", channel: "Example channel", metadata: "Full progress", duration: "24:10", watched: 1, watch-progress: 100, thumbnail: @image-url("mock-thumbnail.svg") }; play-video(id, title) => { root.last-opened = "video " + id; } }
+        }
+        HorizontalLayout {
+            height: root.card-width * 9 / 16 + 124px;
+            spacing: 18px;
+            VideoCard { width: root.card-width; video: { id: "12345678901", title: "History match · progress unknown", channel: "Example channel", metadata: "No invented progress bar", duration: "10:00", watched: 1, watch-progress: -1, thumbnail: @image-url("mock-thumbnail.svg") }; play-video(id, title) => { root.last-opened = "video " + id; } }
+            VideoCard { width: root.card-width; video: { id: "abcdefghijl", title: "Not watched · 0%", channel: "Example channel", metadata: "No red fill", watched: 2, watch-progress: 0, thumbnail: @image-url("mock-thumbnail.svg") }; play-video(id, title) => { root.last-opened = "video " + id; } }
+        }
+        HorizontalLayout {
+            height: root.card-width * 9 / 16 + 124px;
+            spacing: 18px;
+            VideoCard { width: root.card-width; video: { id: "abcdefghijm", title: "A long video title that wraps over more than one line with 65% watched", channel: "Example channel", metadata: "Partial progress", duration: "1:12:36", watched: 1, watch-progress: 65, thumbnail: @image-url("mock-thumbnail.svg") }; play-video(id, title) => { root.last-opened = "video " + id; } }
+            VideoCard { width: root.card-width; video: { id: "PL_mock", title: "A playlist you can open", channel: "Example channel", metadata: "24 videos", playlist: true, watch-progress: 100, thumbnail: @image-url("mock-thumbnail.svg") }; open-playlist(id) => { root.last-opened = id; } }
+        }
+        Text { text: root.last-opened == "" ? "Select a video or playlist" : "Opened " + root.last-opened; color: white; }
+    }
+}

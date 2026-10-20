@@ -1,0 +1,20 @@
+import { Palette } from "std-widgets.slint";
+import { VideoRow } from "../components/video-row.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData } from "../state.slint";
+
+export component AppWindow inherits Window {
+    title: "Playlist video row preview";
+    width: 900px; height: 680px;
+    background: #0f0f0f;
+    init => { Palette.color-scheme = ColorScheme.dark; }
+    private property <string> last-played: "Select a video row";
+    VerticalLayout {
+        padding: 24px;
+        alignment: start;
+        VideoRow { position: 1; video: { title: "A partially watched video", channel: "Example channel", metadata: "12K views · 2 days ago", duration: "24:10", thumbnail: @image-url("mock-thumbnail.svg"), watched: 1, watch-progress: 35 }; play-video(id, title) => { root.last-played = title; } }
+        VideoRow { position: 2; video: { title: "A completed video", channel: "Example channel", metadata: "3K views · 1 week ago", duration: "1:12:36", thumbnail: @image-url("mock-thumbnail.svg"), watched: 1, watch-progress: 100 }; play-video(id, title) => { root.last-played = title; } }
+        VideoRow { position: 3; video: { title: "An unwatched video", channel: "Example channel", metadata: "8K views · 3 days ago", duration: "18:20", thumbnail: @image-url("mock-thumbnail.svg"), watched: 2, watch-progress: 0 }; play-video(id, title) => { root.last-played = title; } }
+        VideoRow { width: 460px; position: 100; video: { title: "A very long video title wrapping across multiple lines in a compact playlist row without hiding its metadata", metadata: "Unavailable channel · 3 days ago", thumbnail: @image-url("mock-thumbnail.svg"), watched: 0, watch-progress: -1 }; play-video(id, title) => { root.last-played = title; } }
+        Text { text: root.last-played; color: white; overflow: elide; }
+    }
+}

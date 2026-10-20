@@ -1,0 +1,12 @@
+import { BackLink } from "../components/back-link.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData } from "../state.slint";
+export component AppWindow inherits Window {
+    title: "Back link preview";
+    width: 360px; height: 140px; background: #0e0e10;
+    private property <int> clicks;
+    VerticalLayout { padding: 24px; spacing: 8px; alignment: start;
+        BackLink { text: "All playlists"; clicked => { root.clicks += 1; } }
+        BackLink { text: "Latest uploads"; clicked => { root.clicks += 1; } }
+        Text { text: "Clicks: " + root.clicks; color: white; }
+    }
+}

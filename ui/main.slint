@@ -1,0 +1,20 @@
+import { AppState } from "./state.slint";
+import { AppContent } from "./app-content.slint";
+import { Palette } from "std-widgets.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData } from "./state.slint";
+
+export component AppWindow inherits Window {
+    title: "SlintYT";
+    icon: @image-url("assets/appicon.png");
+    preferred-width: AppState.player-pip ? 640px : 1440px;
+    max-width: AppState.player-pip ? 640px : 100000px;
+    preferred-height: AppState.player-pip ? 360px : 900px;
+    max-height: AppState.player-pip ? 360px : 100000px;
+    min-width: 480px;
+    min-height: AppState.player-pip ? 280px : 540px;
+    always-on-top: AppState.player-pip;
+    default-font-family: "sans-serif";
+    default-font-size: 14px;
+    init => { Palette.color-scheme = ColorScheme.dark; }
+    AppContent {}
+}

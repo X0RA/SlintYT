@@ -1,0 +1,152 @@
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { AppState } from "state.slint";
+import { BrowserPicker } from "views/browser-picker.slint";
+import { VideoFeed } from "views/video-feed.slint";
+import { VideoPlayer } from "views/video-player.slint";
+import { SettingsPage } from "views/settings.slint";
+import { AppLoading } from "components/app-loading.slint";
+import { NavRail } from "components/nav-rail.slint";
+import { SearchBar } from "components/search-bar.slint";
+import { ActionButton } from "components/action-button.slint";
+import { Avatar } from "components/avatar.slint";
+import { MenuItem, MenuSurface } from "components/menu-item.slint";
+export component AppContent inherits Rectangle {
+    callback switch-profile(int);
+    switch-profile(index) => { AppState.switch-profile(index); }
+    private property <bool> narrow: root.width < 700px;
+    private property <int> other-profiles: max(0, AppState.saved-profiles.length - (AppState.active-profile >= 0 && AppState.active-profile < AppState.saved-profiles.length ? 1 : 0));
+    // Space kept clear for the floating search bar. Feeds scroll underneath it.
+    private property <length> inset: 24px + 48px + 32px;
+    private property <int> active: AppState.settings-open ? 7 : AppState.view-kind;
+    init => { app-keys.focus(); }
+    private property <bool> player-active: AppState.player-open;
+    changed player-active => { if !root.player-active { app-keys.focus(); } }
+    function navigate(kind: int) {
+        app-keys.focus();
+        AppState.account-menu-open = false;
+        AppState.player-sidebar-open = false;
+        if AppState.player-open { AppState.player-close(); }
+        if root.active == kind && !AppState.settings-open { AppState.scroll-reset += 1; return; }
+        AppState.settings-open = kind == 7;
+        if kind == 0 { AppState.load-feed(false); }
+        else if kind == 1 { AppState.load-feed(true); }
+        else if kind == 3 { AppState.open-playlists(); }
+        else if kind == 5 { AppState.open-subscriptions(false); }
+    }
+    private property <int> clipboard-serial: AppState.clipboard-serial;
+    changed clipboard-serial => { clipboard.select-all(); clipboard.copy(); }
+    clipboard := TextInput { text: AppState.clipboard-text; visible: false; }
+    background: Theme.background;
+    forward-focus: app-keys;
+    app-keys := FocusScope {
+    if AppState.initializing : AppLoading { message: AppState.connected ? "Loading your home feed…" : "Connecting to YouTube…"; }
+    if AppState.player-open : VideoPlayer {
+        close => { AppState.player-breadcrumb(-1); }
+        toggle => { AppState.player-toggle(); }
+        seek(value) => { AppState.player-seek(value); }
+        volume-changed(value) => { AppState.player-volume-changed(value); }
+        toggle-fullscreen => { AppState.player-toggle-fullscreen(); }
+        retry => { AppState.player-retry(); }
+        select-quality(index) => { AppState.player-select-quality(index); }
+        select-subtitle(index) => { AppState.player-select-subtitle(index); }
+    }
+    if !AppState.initializing && !AppState.player-open : Rectangle {
+        if !root.narrow : NavRail { x: 0px; y: 0px; width: 80px; height: parent.height; active: root.active; navigate(kind) => { root.navigate(kind); } }
+        if root.narrow : NavRail { y: parent.height - 72px; width: parent.width; height: 72px; horizontal: true; active: root.active; navigate(kind) => { root.navigate(kind); } }
+        FocusScope {
+            x: root.narrow ? 0px : 80px; y: 0px;
+            width: parent.width - self.x; height: parent.height - (root.narrow ? 72px : 0px);
+            VerticalLayout {
+                padding-top: AppState.setup-open || AppState.settings-open ? root.inset : 0px;
+                padding-left: root.narrow ? 16px : 32px; padding-right: root.narrow ? 16px : 32px; padding-bottom: 0px;
+                if AppState.setup-open : ScrollView {
+                    horizontal-scrollbar-policy: always-off;
+                    HorizontalLayout { padding: 24px; alignment: center; BrowserPicker { max-width: 780px; horizontal-stretch: 1; } }
+                }
+                if !AppState.setup-open && AppState.settings-open : SettingsPage {}
+                if !AppState.setup-open && !AppState.settings-open : VideoFeed { top-inset: root.inset; }
+            }
+            HorizontalLayout {
+                y: 24px; height: 48px; padding-left: root.narrow ? 16px : 32px; padding-right: self.padding-left; alignment: center;
+                search := SearchBar { width: min(600px, parent.width - parent.padding-left * 2); }
+            }
+        }
+    }
+    if AppState.player-sidebar-open && AppState.player-open : Rectangle {
+        background: #00000099;
+        TouchArea { clicked => { AppState.player-sidebar-open = false; } }
+        NavRail { x: 0px; y: 0px; width: 80px; height: parent.height; active: root.active; navigate(kind) => { root.navigate(kind); } }
+    }
+    if AppState.account-menu-open : Rectangle {
+        TouchArea { clicked => { AppState.account-menu-open = false; } }
+        account-menu := MenuSurface {
+            x: root.narrow ? max(8px, parent.width - self.width - 8px) : 72px;
+            y: parent.height - self.height - (root.narrow ? 72px : 14px);
+            width: 260px; height: account-layout.preferred-height; border-radius: 14px;
+            TouchArea {}
+            account-layout := VerticalLayout { padding: 6px; spacing: 0px;
+                HorizontalLayout { padding-left: 8px; padding-right: 8px; padding-top: 8px; padding-bottom: 10px; spacing: 11px; cross-axis-alignment: center;
+                    Avatar { width: 36px; initials: AppState.account-initial; tone: #26262c; url: AppState.account-avatar; }
+                    VerticalLayout { horizontal-stretch: 1; alignment: center; spacing: 2px;
+                        account-name := Text { text: AppState.account-name; accessible-role: text; accessible-label: self.text; color: Theme.text; font-size: 14px; font-weight: 600; overflow: elide; }
+                        account-source := Text { text: AppState.account-label; accessible-role: text; accessible-label: self.text; color: Theme.muted; font-size: 12px; overflow: elide; }
+                    }
+                    Rectangle {
+                        width: synced-layout.preferred-width; height: 22px; border-radius: 11px; background: #4ade801a;
+                        accessible-role: text; accessible-label: "Synced"; accessible-description: AppState.watch-note;
+                        synced-layout := HorizontalLayout { padding-left: 9px; padding-right: 9px; spacing: 6px; cross-axis-alignment: center;
+                            Rectangle { width: 6px; height: 6px; border-radius: 3px; background: Theme.success; }
+                            Text { text: "Synced"; color: #86efac; font-size: 11px; font-weight: 600; vertical-alignment: center; }
+                        }
+                    }
+                }
+                Rectangle { height: 1px;
+                    Rectangle { x: 4px; width: parent.width - 8px; height: 1px; background: #26262c; }
+                }
+                Rectangle { height: 4px; }
+                if root.other-profiles > 0 : ScrollView {
+                    height: min(208px, root.other-profiles * 52px);
+                    content-width: self.visible-width;
+                    VerticalLayout { spacing: 0px;
+                        for profile[index] in AppState.saved-profiles : Rectangle {
+                            height: index == AppState.active-profile ? 0px : 52px;
+                            vertical-stretch: 0;
+                            if index != AppState.active-profile : Rectangle {
+                                border-radius: 8px;
+                                background: profile-touch.has-hover ? Theme.raised : transparent;
+                                accessible-role: button;
+                                accessible-label: profile.name;
+                                accessible-description: profile.label;
+                                accessible-enabled: !AppState.busy;
+                                accessible-action-default => { if !AppState.busy { root.switch-profile(index); } }
+                                HorizontalLayout {
+                                    padding-left: 8px; padding-right: 8px; spacing: 11px; cross-axis-alignment: center;
+                                    Avatar { width: 32px; initials: profile.initials; url: profile.avatar; tone: #26262c; accessible-role: none; }
+                                    VerticalLayout { alignment: center; spacing: 2px;
+                                        Text { text: profile.name; color: Theme.text; font-size: 13px; font-weight: 600; overflow: elide; }
+                                        Text { text: profile.label; color: Theme.muted; font-size: 11px; overflow: elide; }
+                                    }
+                                }
+                                profile-touch := TouchArea {
+                                    enabled: !AppState.busy; mouse-cursor: pointer;
+                                    clicked => { root.switch-profile(index); }
+                                }
+                            }
+                        }
+                    }
+                }
+                change-browser := MenuItem { text: "Change browser"; icon: "globe"; trailing-chevron: true; min-height: 44px;
+                    clicked => { AppState.account-menu-open = false; AppState.settings-open = false; AppState.setup-open = true; AppState.error = ""; AppState.scan-profiles(); }
+                }
+            }
+        }
+    }
+    if AppState.toast != "" : Rectangle { x: (parent.width - self.width) / 2; y: parent.height - 72px; width: min(parent.width - 32px, toast-text.preferred-width + 36px); height: 42px; background: Theme.strong; border-radius: 24px;
+        toast-text := Text { text: AppState.toast; color: Theme.background; font-size: 13px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
+    }
+    Timer { interval: 3500ms; running: AppState.toast != ""; triggered => { AppState.toast = ""; } }
+    KeyBinding { keys: @keys(Slash); enabled: !AppState.player-open; activated => { AppState.search-focus-serial += 1; } }
+    KeyBinding { keys: @keys(Escape); enabled: !AppState.player-open; activated => { AppState.account-menu-open = false; AppState.search-text = ""; app-keys.focus(); } }
+    }
+}

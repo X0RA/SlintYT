@@ -1,0 +1,19 @@
+import { MenuItem, MenuSurface } from "../components/menu-item.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData } from "../state.slint";
+export component AppWindow inherits Window {
+    title: "Menu item preview";
+    width: 460px; height: 420px; background: #0e0e10;
+    private property <int> picked: 1;
+    MenuSurface {
+        x: 24px; y: 24px; width: 400px; height: menu.preferred-height;
+        menu := VerticalLayout { padding: 6px;
+            MenuItem { text: "Best available"; detail: "Picked automatically by yt-dlp"; checked: root.picked == 0; clicked => { root.picked = 0; } }
+            MenuItem { text: "2160p 60fps"; detail: "vp09.00.51.08 + opus · webm · https · 315 · SDR"; checked: root.picked == 1; clicked => { root.picked = 1; } }
+            MenuItem { text: "1080p 30fps"; detail: "avc1.640028 + mp4a.40.2 · mp4 · m3u8_native · 96 · unavailable"; checked: root.picked == 2; clicked => { root.picked = 2; } }
+            MenuItem { text: "1×"; checked: true; }
+            MenuItem { text: "Watch later"; icon: "clock"; }
+            MenuItem { text: "A playlist with a very long name that should elide before the edge of the menu"; icon: "playlist"; }
+            MenuItem { text: "Change browser"; icon: "globe"; trailing-chevron: true; }
+        }
+    }
+}

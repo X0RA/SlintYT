@@ -1,0 +1,38 @@
+import { Theme } from "../theme.slint";
+export component Icon inherits Image {
+    in property <string> name;
+    in property <color> tint: Theme.muted;
+    width: 22px; height: 22px;
+    colorize: root.tint;
+    source: root.name == "home" ? @image-url("../images/home.svg")
+        : root.name == "subscriptions" ? @image-url("../images/subscriptions.svg")
+        : root.name == "history" ? @image-url("../images/history.svg")
+        : root.name == "settings" ? @image-url("../images/settings.svg")
+        : root.name == "refresh" ? @image-url("../images/refresh.svg")
+        : root.name == "search" ? @image-url("../images/search.svg")
+        : root.name == "back" ? @image-url("../images/back.svg")
+        : root.name == "play" ? @image-url("../images/play.svg")
+        : root.name == "pause" ? @image-url("../images/pause.svg")
+        : root.name == "next" ? @image-url("../images/next.svg")
+        : root.name == "volume" ? @image-url("../images/volume.svg")
+        : root.name == "mute" ? @image-url("../images/mute.svg")
+        : root.name == "fullscreen" ? @image-url("../images/fullscreen.svg")
+        : root.name == "pip" ? @image-url("../images/pip.svg")
+        : root.name == "subtitles" ? @image-url("../images/subtitles.svg")
+        : root.name == "sidebar" ? @image-url("../images/sidebar.svg")
+        : root.name == "clock" ? @image-url("../images/clock.svg")
+        : root.name == "heart" ? @image-url("../images/heart.svg")
+        : root.name == "like" ? @image-url("../images/like.svg")
+        : root.name == "link" ? @image-url("../images/link.svg")
+        : root.name == "save" ? @image-url("../images/save.svg")
+        : root.name == "shuffle" ? @image-url("../images/shuffle.svg")
+        : root.name == "more" ? @image-url("../images/more.svg")
+        : root.name == "close" ? @image-url("../images/close.svg")
+        : root.name == "check" ? @image-url("../images/check.svg")
+        : root.name == "down" ? @image-url("../images/down.svg")
+        : root.name == "drag" ? @image-url("../images/drag.svg")
+        : root.name == "chevron" ? @image-url("../images/chevron.svg")
+        : root.name == "chevron-left" ? @image-url("../images/chevron-left.svg")
+        : root.name == "globe" ? @image-url("../images/globe.svg")
+        : @image-url("../images/playlist.svg");
+}

@@ -1,0 +1,43 @@
+import { Theme } from "../theme.slint";
+// Thin seek/volume track: played fill, optional buffered fill, and a knob. Click or drag to set.
+export component Scrubber inherits Rectangle {
+    in property <float> value;
+    in property <float> maximum: 1;
+    in property <float> buffered: 0;
+    in property <bool> enabled: true;
+    in property <color> fill: Theme.accent;
+    in property <length> thickness: 4px;
+    in property <bool> knob-always: true;
+    in property <string> label;
+    callback changed(float);
+    callback released(float);
+    private property <bool> active: touch.has-hover || touch.pressed;
+    private property <length> bar: root.active ? root.thickness + 2px : root.thickness;
+    private property <float> shown: touch.pressed ? root.at(touch.mouse-x) : root.value;
+    pure function at(x: length) -> float { return max(0, min(1, x / max(1px, root.width))) * root.maximum; }
+    pure function ratio(v: float) -> float { return root.maximum <= 0 ? 0 : max(0, min(1, v / root.maximum)); }
+    height: 18px;
+    accessible-role: slider;
+    accessible-label: root.label;
+    accessible-value: round(root.value);
+    accessible-value-minimum: 0;
+    accessible-value-maximum: root.maximum;
+    Rectangle { x: 0px; y: (parent.height - self.height) / 2; width: parent.width; height: root.bar; border-radius: self.height / 2; background: #ffffff38;
+        animate height { duration: 120ms; }
+    }
+    if root.buffered > 0 : Rectangle { x: 0px; y: (parent.height - self.height) / 2; width: parent.width * root.ratio(root.buffered); height: root.bar; border-radius: self.height / 2; background: #ffffff61; }
+    Rectangle { x: 0px; y: (parent.height - self.height) / 2; width: parent.width * root.ratio(root.shown); height: root.bar; border-radius: self.height / 2; background: root.fill; }
+    if root.knob-always || root.active : Rectangle {
+        x: parent.width * root.ratio(root.shown) - self.width / 2; y: (parent.height - self.height) / 2;
+        width: root.active ? 14px : 12px; height: self.width; border-radius: self.width / 2; background: white;
+        drop-shadow-color: #00000080; drop-shadow-blur: 4px; drop-shadow-offset-y: 1px;
+    }
+    touch := TouchArea {
+        enabled: root.enabled; mouse-cursor: pointer;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down { root.changed(root.at(self.mouse-x)); }
+            if event.kind == PointerEventKind.up { root.released(root.at(self.mouse-x)); }
+        }
+        moved => { if self.pressed { root.changed(root.at(self.mouse-x)); } }
+    }
+}

@@ -1,0 +1,15 @@
+import { PillInput } from "../components/pill-input.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData } from "../state.slint";
+export component AppWindow inherits Window {
+    title: "Pill input preview";
+    width: 520px; height: 260px; background: #0e0e10;
+    private property <string> submitted;
+    VerticalLayout {
+        padding: 24px; spacing: 16px;
+        PillInput { icon: "search"; placeholder: "Filter channels"; }
+        PillInput { icon: "search"; placeholder: "Search Linus Tech Tips"; text: "a very long query that should scroll inside the field without overflowing it"; }
+        PillInput { height: 44px; placeholder: "Add a comment…"; accepted(text) => { root.submitted = text; } }
+        PillInput { placeholder: "Disabled"; enabled: false; }
+        Text { text: root.submitted == "" ? "Press Enter in the comment field" : "Submitted: " + root.submitted; color: white; }
+    }
+}

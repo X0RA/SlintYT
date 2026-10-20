@@ -1,0 +1,71 @@
+import { Theme } from "../theme.slint";
+import { AppState, VideoData } from "../state.slint";
+import { Avatar } from "avatar.slint";
+import { Icon } from "icon.slint";
+export component VideoCard inherits Rectangle {
+    in property <VideoData> video;
+    in property <bool> enabled: true;
+    in property <bool> compact: false;
+    in property <bool> show-watched: true;
+    in property <bool> channel-links: true;
+    callback open-playlist(string);
+    // Shorts on Home carry no channel, so they have no avatar to show.
+    private property <bool> has-avatar: root.video.channel != "" || root.video.avatar != "";
+    callback play-video(string, string);
+    function activate() {
+        if root.enabled { if root.video.playlist { root.open-playlist(root.video.id); } else { root.play-video(root.video.id, root.video.title); } }
+    }
+    accessible-role: groupbox;
+    accessible-label: root.video.title + (root.video.playlist ? ", playlist" : root.video.watched == 1 ? ", watched" : "");
+    accessible-action-default => { root.activate(); }
+    preferred-height: self.width * 9 / 16 + 39px;
+    border-radius: 24px;
+    border-width: 1px;
+    border-color: touch.has-hover ? #44444d : #24242b;
+    background: Theme.card;
+    clip: true;
+    drop-shadow-color: #00000050;
+    drop-shadow-blur: 20px;
+    drop-shadow-offset-y: 10px;
+    thumb := Rectangle {
+        x: 1px; y: 39px; width: parent.width - 2px; height: parent.height - 40px;
+        background: root.video.tone;
+        Image { width: parent.width; height: parent.height; source: root.video.thumbnail; image-fit: cover; opacity: root.video.watched == 1 && root.show-watched ? 0.65 : 1; }
+        Rectangle { width: parent.width; height: parent.height * 0.65; y: parent.height - self.height; background: @linear-gradient(180deg, #00000000, #000000d9); }
+        if root.video.thumbnail.width == 0 : Icon { name: "subscriptions"; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; tint: #ffffff55; }
+        if root.video.watched == 1 && root.show-watched : Rectangle {
+            x: parent.width - self.width - 12px; y: 12px; width: watched-layout.preferred-width; height: 26px;
+            border-radius: 13px; background: #0a0a0bb8; border-width: 1px; border-color: #ffffff1f;
+            watched-layout := HorizontalLayout { padding-left: 9px; padding-right: 11px; spacing: 5px; cross-axis-alignment: center;
+                Icon { name: "check"; tint: white; width: 13px; height: 13px; }
+                Text { text: "Watched"; color: white; font-size: 12px; font-weight: 600; vertical-alignment: center; }
+            }
+        }
+        if root.video.duration != "" : Rectangle {
+            x: parent.width - self.width - (root.compact ? 10px : 12px); y: parent.height - self.height - (root.compact ? 10px : 12px);
+            width: duration.preferred-width + 20px; height: 24px;
+            border-radius: 14px; background: root.video.duration == "LIVE" ? #dc2626 : #0a0a0bd0;
+            border-width: 1px; border-color: #ffffff20;
+            duration := Text { text: root.video.duration; color: white; font-size: 12px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+        }
+        VerticalLayout {
+            padding-left: 14px; padding-right: 86px; padding-bottom: 12px; alignment: end; spacing: 2px;
+            Text { text: root.video.channel; color: white; font-size: root.compact ? 12px : 13px; font-weight: 600; overflow: elide; height: 18px; }
+            Text { text: root.video.metadata; color: #d4d4d8; font-size: root.compact ? 11px : 12px; overflow: elide; height: 17px; }
+        }
+        if root.video.watch-progress > 0 : Rectangle {
+            x: 0px; y: parent.height - 3px; width: parent.width; height: 3px; background: #ffffff33;
+            Rectangle { x: 0px; y: 0px; width: parent.width * min(100, root.video.watch-progress) / 100; height: parent.height; background: Theme.accent; }
+        }
+    }
+    Text { x: root.has-avatar ? 60px : 16px; y: 0px; width: parent.width - self.x - 16px; height: 39px; text: root.video.title; color: Theme.strong; font-size: 14px; font-weight: 600; overflow: elide; vertical-alignment: center; }
+    touch := TouchArea { enabled: root.enabled; mouse-cursor: pointer; clicked => { root.activate(); } }
+    if root.has-avatar : Rectangle {
+        x: -4px; y: -4px; width: 56px; height: 56px; background: Theme.card; border-radius: 28px;
+        Avatar { x: 4px; y: 4px; initials: root.video.initials == "" ? "?" : root.video.initials; tone: root.video.tone; url: root.video.avatar; clickable: root.channel-links && root.video.channel-id != ""; label: "Open channel " + root.video.channel; clicked => { AppState.open-channel(root.video.channel-id, 0, 0, ""); } }
+    }
+    if root.channel-links && root.video.channel-id != "" : TouchArea {
+        x: 14px; y: parent.height - 53px; width: parent.width - 100px; height: 22px; mouse-cursor: pointer;
+        clicked => { AppState.open-channel(root.video.channel-id, 0, 0, ""); }
+    }
+}

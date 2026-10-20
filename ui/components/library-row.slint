@@ -1,0 +1,51 @@
+import { Theme } from "../theme.slint";
+import { Icon } from "icon.slint";
+import { Avatar } from "avatar.slint";
+import { ActionButton } from "action-button.slint";
+import { AppState, VideoData } from "../state.slint";
+export component LibraryRow inherits Rectangle {
+    in property <VideoData> item;
+    in property <bool> channel: false;
+    in property <bool> subscribed: true;
+    // The first row also draws the list's top border.
+    in property <bool> first: false;
+    in property <bool> compact: false;
+    callback activate();
+    private property <string> kind: root.item.id == "WL" ? "Saved for later" : root.item.id == "LL" ? "Videos you liked" : "Your playlist";
+    height: root.compact ? 89px : 105px;
+    background: touch.has-hover ? #121215 : transparent;
+    clip: true;
+    accessible-role: button; accessible-label: root.item.title; accessible-action-default => { root.activate(); }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.activate(); } }
+    if root.first : Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: Theme.row; }
+    Rectangle { x: 0px; y: parent.height - 1px; width: parent.width; height: 1px; background: Theme.row; }
+    HorizontalLayout {
+        padding-left: 8px; padding-right: 4px; spacing: 16px;
+        cross-axis-alignment: center;
+        Rectangle {
+          horizontal-stretch: 1;
+          opacity: root.channel && !root.subscribed ? 0.4 : 1;
+          HorizontalLayout {
+            spacing: root.compact ? 14px : 20px; cross-axis-alignment: center;
+            Rectangle {
+                width: root.compact ? 56px : 72px; height: self.width; border-radius: root.channel ? self.width / 2 : 20px;
+                background: root.channel ? root.item.tone : root.item.id == "WL" ? #3a3025 : root.item.id == "LL" ? #3d2834 : #26303e;
+                if !root.channel : Icon { width: 26px; height: 26px; name: root.item.id == "WL" ? "clock" : root.item.id == "LL" ? "heart" : "playlist"; tint: #e4e4e7; }
+                if root.channel : Avatar { width: parent.width; initials: root.item.initials; tone: root.item.tone; url: root.item.avatar; }
+            }
+            VerticalLayout { horizontal-stretch: 1; alignment: center; spacing: 6px;
+                Text { text: root.item.title; color: Theme.text; font-size: 18px; font-weight: 600; overflow: elide; }
+                Text {
+                    text: root.channel || root.item.metadata == "" ? (root.channel ? root.item.metadata : root.kind) : root.item.metadata + " · " + root.kind;
+                    color: Theme.subtle; font-size: 13px; overflow: elide;
+                }
+            }
+          }
+        }
+        if root.channel : ActionButton {
+            height: 40px; text: root.subscribed ? "Unsubscribe" : "Subscribe"; outlined: root.subscribed; primary: !root.subscribed;
+            enabled: !AppState.action-busy; clicked => { AppState.toggle-subscription(root.item.id, !root.subscribed); }
+        }
+        Rectangle { width: 36px; height: 44px; Icon { name: "chevron"; width: 18px; height: 18px; tint: #52525b; } }
+    }
+}

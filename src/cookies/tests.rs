@@ -146,6 +146,36 @@ fn firefox_import_filters_domains_and_expiry_without_touching_nested_profiles() 
 }
 
 #[test]
+fn firefox_import_reads_exclusively_locked_database_and_uncheckpointed_wal() {
+    for wal in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("cookies.sqlite");
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch("PRAGMA locking_mode=EXCLUSIVE;").unwrap();
+        if wal {
+            db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;")
+                .unwrap();
+        }
+        db.execute_batch("CREATE TABLE moz_cookies(host TEXT,name TEXT,value TEXT,path TEXT,expiry INTEGER,isSecure INTEGER); INSERT INTO moz_cookies VALUES('.youtube.com','SAPISID','synthetic-locked-session','/',0,1),('.example.com','OTHER','unrelated','/',0,1);").unwrap();
+        assert!(
+            Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .unwrap()
+                .prepare("SELECT host FROM moz_cookies")
+                .is_err()
+        );
+        let text = netscape(firefox(&path, 10).unwrap(), 10).unwrap();
+        assert!(text.contains("SAPISID\tsynthetic-locked-session"));
+        assert!(!text.contains("unrelated"));
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM moz_cookies", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+    }
+}
+
+#[test]
 fn cookie_export_rejects_delimiter_injection_and_empty_sessions() {
     assert!(netscape(Vec::new(), 1).is_err());
     let cookie = Cookie {

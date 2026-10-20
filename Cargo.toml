@@ -18,6 +18,7 @@ sha2 = "0.10"
 rusqlite = { version = "0.40", features = ["bundled"] }
 shlex = "1"
 zeroize = "1"
+tempfile = "3"
 directories = "6"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
@@ -40,9 +41,6 @@ windows-sys = { version = "0.61", features = ["Win32_Security_Cryptography", "Wi
 
 [build-dependencies]
 slint-build = "1.18.1"
-
-[dev-dependencies]
-tempfile = "3"
 
 [profile.dev-fast]
 inherits = "dev"

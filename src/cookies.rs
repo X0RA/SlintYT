@@ -104,8 +104,7 @@ fn open(path: &Path) -> Result<Connection> {
 }
 
 fn firefox(path: &Path, now: i64) -> Result<Vec<Cookie>> {
-    let connection = open(path)?;
-    let result = (|| -> rusqlite::Result<_> {
+    with_database(path, |connection| {
         let mut query = connection.prepare("SELECT host,name,value,path,expiry,isSecure FROM moz_cookies WHERE host IN ('youtube.com','.youtube.com','www.youtube.com','.www.youtube.com') AND (expiry = 0 OR expiry > ?1)")?;
         query
             .query_map([now], |row| {
@@ -119,13 +118,11 @@ fn firefox(path: &Path, now: i64) -> Result<Vec<Cookie>> {
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()
-    })();
-    result.map_err(|_| anyhow::anyhow!(DATABASE_ERROR))
+    })
 }
 
 fn chromium(path: &Path, now: i64) -> Result<(Vec<EncryptedCookie>, u32)> {
-    let mut connection = open(path)?;
-    let result = (|| -> rusqlite::Result<_> {
+    with_database(path, |connection| {
         let transaction = connection.transaction()?;
         let version: Option<String> = transaction
             .query_row("SELECT value FROM meta WHERE key='version'", [], |r| {
@@ -174,8 +171,57 @@ fn chromium(path: &Path, now: i64) -> Result<(Vec<EncryptedCookie>, u32)> {
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok((rows, version))
-    })();
-    result.map_err(|_| anyhow::anyhow!(DATABASE_ERROR))
+    })
+}
+
+fn with_database<T>(
+    path: &Path,
+    read: impl Fn(&mut Connection) -> rusqlite::Result<T>,
+) -> Result<T> {
+    let mut connection = open(path)?;
+    match read(&mut connection) {
+        Ok(value) => return Ok(value),
+        Err(rusqlite::Error::SqliteFailure(error, _))
+            if matches!(
+                error.code,
+                rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+            ) => {}
+        Err(_) => bail!(DATABASE_ERROR),
+    }
+    drop(connection);
+
+    // Firefox forks can hold an exclusive SQLite lock while running (including
+    // Zen on macOS). Read a private copy in that case, keeping the WAL so recent
+    // logins are included. Never copy the browser's lock-bearing shared memory.
+    // TempDir restricts access to its owner and removes all copies on drop.
+    let directory = tempfile::tempdir().map_err(|_| anyhow::anyhow!(DATABASE_ERROR))?;
+    let snapshot = directory.path().join("Cookies");
+    let wal = path.with_file_name(format!(
+        "{}-wal",
+        path.file_name().unwrap_or_default().to_string_lossy()
+    ));
+    for _ in 0..3 {
+        let copied = (|| -> Result<T> {
+            std::fs::copy(path, &snapshot)?;
+            match std::fs::copy(&wal, directory.path().join("Cookies-wal")) {
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    match std::fs::remove_file(directory.path().join("Cookies-wal")) {
+                        Ok(()) => {}
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) => return Err(error.into()),
+                    }
+                }
+                Err(error) => return Err(error.into()),
+            }
+            let mut connection = open(&snapshot)?;
+            Ok(read(&mut connection)?)
+        })();
+        if let Ok(value) = copied {
+            return Ok(value);
+        }
+    }
+    bail!(DATABASE_ERROR)
 }
 
 async fn chromium_key(

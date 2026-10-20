@@ -1,13 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Replace the placeholder when the upstream repository exists.
-REPO="${SLINTYT_REPO:-OWNER/REPOSITORY}"
+# Override SLINTYT_REPO to install from a fork.
+REPO="${SLINTYT_REPO:-X0RA/SlintYT}"
 VERSION="${SLINTYT_VERSION:-latest}"
-if [ "$REPO" = "OWNER/REPOSITORY" ]; then
-    echo 'No upstream configured. Set SLINTYT_REPO=owner/repo after publishing a release.' >&2
-    exit 1
-fi
 DMG_NAME="slintyt-macos-arm64.dmg"
 APP_NAME="SlintYT.app"
 APP_DEST="/Applications/${APP_NAME}"

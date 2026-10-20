@@ -1,14 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Set SLINTYT_REPO once a GitHub repository exists, or replace this placeholder.
-REPO="${SLINTYT_REPO:-OWNER/REPOSITORY}"
+# Override SLINTYT_REPO to install from a fork.
+REPO="${SLINTYT_REPO:-X0RA/SlintYT}"
 VERSION="${SLINTYT_VERSION:-latest}"
 PREFIX="${PREFIX:-/usr/local}"
-if [[ "$REPO" == "OWNER/REPOSITORY" ]]; then
-    echo 'No upstream configured. Use make install from a local build, or set SLINTYT_REPO=owner/repo.' >&2
-    exit 1
-fi
 if [[ "$(uname -s)" != Linux || "$(uname -m)" != x86_64 ]]; then
     echo 'This installer requires Linux x86_64.' >&2
     exit 1

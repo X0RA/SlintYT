@@ -8,4 +8,4 @@ if an installer changed PATH. A browser profile signed in to YouTube is required
 Select the browser profile in SlintYT. Firefox is supported on Windows;
 Chromium App-Bound (v20) cookie encryption is not currently supported.
 
-Repository placeholder https://github.com/OWNER/REPOSITORY
+Repository https://github.com/X0RA/SlintYT

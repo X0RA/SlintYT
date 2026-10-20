@@ -1,6 +1,6 @@
 # SlintYT
 
-SlintYT is a desktop app built in rust with slint for watching [YouTube](https://www.youtube.com) through your own account, with playback handled by [mpv](https://mpv.io).
+SlintYT is a desktop app built in Rust with Slint for watching [YouTube](https://www.youtube.com) through your own account, with playback handled by [mpv](https://mpv.io).
 
 There's no API key or separate login. It borrows the YouTube sign-in from a browser profile you're already logged into, so your recommendations, subscriptions, history and playlists all show up as they normally would.
 
@@ -14,3 +14,21 @@ It is built around a simple flow:
 - switch between saved profiles from the account menu
 
 You'll need `yt-dlp` (kept up to date), libmpv and a JavaScript runtime like Deno on your `PATH`. Then just run `cargo run --locked`.
+
+## Installation
+
+### Linux (direct install)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/X0RA/SlintYT/main/scripts/install-linux.sh | bash
+```
+
+### macOS (Apple Silicon)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/X0RA/SlintYT/main/scripts/install-macos.sh | bash
+```
+
+### Windows
+
+Download the latest installer from the [Releases page](https://github.com/X0RA/SlintYT/releases/latest).

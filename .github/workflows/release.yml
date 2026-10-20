@@ -18,7 +18,7 @@ env:
   CARGO_TERM_COLOR: always
   APP_BIN: slintyt
   APP_NAME: SlintYT
-  APP_BUNDLE_ID: io.github.placeholder.slintyt
+  APP_BUNDLE_ID: io.github.x0ra.slintyt
 
 jobs:
   version:

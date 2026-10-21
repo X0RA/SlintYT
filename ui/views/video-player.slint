@@ -73,12 +73,16 @@ export component VideoPlayer inherits Rectangle {
     private property <float> seek-position;
     private property <bool> controls-visible: true;
     private property <int> menu: 0;
+    // Held "," / "." key: -1 steps back, 1 steps forward. Repeats start after a short hold.
+    private property <int> frame-dir: 0;
+    private property <bool> frame-held: false;
     private property <bool> playable: !AppState.player-loading && AppState.player-error == "";
     private property <bool> narrow: root.width < 700px;
     private property <bool> chrome: !AppState.player-fullscreen && !AppState.player-pip;
     // Keep the current video plus the one before it visible; earlier crumbs collapse into "…".
     private property <int> hidden-crumbs: max(0, AppState.breadcrumbs.length - (root.narrow ? 1 : 2));
     private property <bool> overlay: root.controls-visible || AppState.player-paused || root.menu != 0 || !root.playable || bottom-touch.has-hover || top-touch.has-hover;
+    pure function frame-key(text: string) -> int { return text == "," || text == "<" ? -1 : text == "." || text == ">" ? 1 : 0; }
     pure function pad(value: int) -> string { return (value < 10 ? "0" : "") + value; }
     pure function clock(seconds: float) -> string {
         let total = floor(max(0, seconds));
@@ -278,6 +282,27 @@ export component VideoPlayer inherits Rectangle {
                 if !AppState.player-fullscreen && !AppState.player-pip : VideoDetails {}
             }
         }
+        key-pressed(event) => {
+            let dir = root.frame-key(event.text);
+            if dir == 0 || !root.playable { return reject; }
+            if !event.repeat {
+                root.frame-dir = dir;
+                root.frame-held = false;
+                AppState.player-frame-step(dir < 0);
+                root.show-controls();
+            }
+            return accept;
+        }
+        key-released(event) => {
+            // Shift may be released first, so any frame key ends the hold.
+            if root.frame-key(event.text) == 0 { return reject; }
+            root.frame-dir = 0;
+            root.frame-held = false;
+            return accept;
+        }
+        changed has-focus => { if !self.has-focus { root.frame-dir = 0; root.frame-held = false; } }
+        Timer { interval: 250ms; running: root.frame-dir != 0 && !root.frame-held; triggered => { root.frame-held = true; } }
+        Timer { interval: 2ms; running: root.frame-dir != 0 && root.frame-held && root.playable; triggered => { AppState.player-frame-step(root.frame-dir < 0); } }
         hide-controls := Timer { interval: 3000ms; running: true; triggered => { if !root.seeking && surface.mouse-y > 80px && surface.mouse-y < picture.height - 230px { root.controls-visible = false; } } }
         KeyBinding { keys: @keys(Space); enabled: root.playable; activated => { root.toggle(); root.show-controls(); } }
         KeyBinding { keys: @keys(K); enabled: root.playable; activated => { root.toggle(); root.show-controls(); } }

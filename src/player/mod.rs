@@ -37,6 +37,7 @@ pub struct Playback {
     subtitle_choices: RwLock<Vec<subtitles::Track>>,
     cache: Arc<Mutex<quality::Cache>>,
     queue: Mutex<queue::Queue>,
+    frame_step: Arc<AtomicBool>,
 }
 
 #[derive(Default)]
@@ -503,6 +504,7 @@ pub fn install(app: &AppWindow, runtime: Handle) -> Arc<Playback> {
         subtitle_choices: RwLock::new(Vec::new()),
         cache: Arc::new(Mutex::new(quality::Cache::default())),
         queue: Mutex::default(),
+        frame_step: Arc::new(AtomicBool::new(false)),
     });
     if let Some(engine) = &player.engine {
         register_renderer(app, engine.clone(), player.ready.clone());
@@ -628,6 +630,20 @@ pub fn install(app: &AppWindow, runtime: Handle) -> Arc<Playback> {
         {
             app.global::<AppState>().set_player_speed(speed);
             let _ = commands.send(Command::Speed(owner.epoch.load(Ordering::Acquire), speed));
+        }
+    });
+    let owner = player.clone();
+    state.on_player_frame_step(move |back| {
+        // Skip while the previous step is still in progress, so holding the key
+        // runs as fast as mpv can step and stops as soon as it is released.
+        if let Some(commands) = &owner.commands
+            && !owner.frame_step.swap(true, Ordering::AcqRel)
+        {
+            let _ = commands.send(Command::FrameStep(
+                owner.epoch.load(Ordering::Acquire),
+                back,
+                owner.frame_step.clone(),
+            ));
         }
     });
     let (weak, owner) = (app.as_weak(), player.clone());

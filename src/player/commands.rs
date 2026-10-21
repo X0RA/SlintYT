@@ -10,7 +10,7 @@ use slint::ComponentHandle;
 use std::{
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Sender},
     },
     time::{Duration, Instant},
@@ -32,6 +32,9 @@ pub enum Command {
     Volume(u64, f32),
     Speed(u64, f32),
     Mute(u64, bool),
+    /// Step one frame, backwards when true. The flag is cleared once the
+    /// frame is shown, so a held key never queues a backlog of steps.
+    FrameStep(u64, bool, Arc<AtomicBool>),
     Subtitle {
         epoch: u64,
         track: Option<super::subtitles::Track>,
@@ -230,6 +233,10 @@ pub fn start(
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Ok(command) => {
+                    let step = match &command {
+                        Command::FrameStep(_, _, pending) => Some(pending.clone()),
+                        _ => None,
+                    };
                     let epoch = match &command {
                         Command::Stop(e)
                         | Command::Load { epoch: e, .. }
@@ -237,11 +244,15 @@ pub fn start(
                         | Command::Seek(e, _)
                         | Command::Volume(e, _)
                         | Command::Speed(e, _)
-                        | Command::Mute(e, _) => *e,
+                        | Command::Mute(e, _)
+                        | Command::FrameStep(e, _, _) => *e,
                         Command::Subtitle { epoch, .. } => *epoch,
                         Command::Shutdown(_) => unreachable!(),
                     };
                     if current.load(Ordering::Acquire) != epoch {
+                        if let Some(pending) = step {
+                            pending.store(false, Ordering::Release);
+                        }
                         continue;
                     }
                     if loaded {
@@ -339,6 +350,32 @@ pub fn start(
                         }
                         Command::Speed(_, speed) => engine.set_property("speed", f64::from(speed)),
                         Command::Mute(_, muted) => engine.set_property("mute", muted),
+                        Command::FrameStep(_, back, _) => {
+                            if back && let Some(tracker) = &mut tracker {
+                                tracker.seek(true);
+                            }
+                            let before = engine.get_property::<f64>("time-pos").ok();
+                            let result = engine.command(
+                                if back {
+                                    "frame-back-step"
+                                } else {
+                                    "frame-step"
+                                },
+                                &[],
+                            );
+                            // mpv returns before the frame is shown. Wait for it,
+                            // so a held key never queues steps that run on after
+                            // release, and a back step's seek is not cancelled.
+                            let deadline = Instant::now()
+                                + Duration::from_millis(if back { 1000 } else { 250 });
+                            while result.is_ok()
+                                && Instant::now() < deadline
+                                && engine.get_property::<f64>("time-pos").ok() == before
+                            {
+                                std::thread::sleep(Duration::from_millis(1));
+                            }
+                            result
+                        }
                         Command::Subtitle { track, index, .. } => {
                             subtitle = Some((track, index));
                             Ok(())
@@ -347,6 +384,9 @@ pub fn start(
                     };
                     if let Err(error) = result {
                         publish(&weak, current.clone(), epoch, Update::Error(error, None));
+                    }
+                    if let Some(pending) = step {
+                        pending.store(false, Ordering::Release);
                     }
                 }
             }

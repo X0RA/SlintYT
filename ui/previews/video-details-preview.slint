@@ -22,6 +22,8 @@ export component AppWindow inherits Window {
         HorizontalLayout {
             Button { text: "More replies available"; clicked => { AppState.comments = [{id:"mock",author:"@viewer",initials:"V",text:"A thread with another page of replies.",replies:3,expanded:true,token:"next-page"},{id:"reply",author:"@reply",initials:"R",text:"First loaded reply",indent:1}]; } }
             Button { text: "All replies loaded"; clicked => { AppState.comments = [{id:"mock",author:"@viewer",initials:"V",text:"All replies loaded.",replies:1,expanded:true},{id:"reply",author:"@reply",initials:"R",text:"Loaded reply",indent:1}]; } }
+            Button { text: "Total count"; clicked => { AppState.comments-total = AppState.comments-total == "" ? "1.2K" : ""; } }
+            Button { text: "More comments"; clicked => { AppState.comments-more = !AppState.comments-more; } }
             Button { text: "Loading"; clicked => { AppState.comments-loading = !AppState.comments-loading; } }
             Button { text: "Error"; clicked => { AppState.comments-error = "Could not load replies. Please retry."; AppState.comments-loading = false; } }
             Button { text: "Empty"; clicked => { AppState.comments = []; AppState.comments-error = ""; AppState.comments-loading = false; } }

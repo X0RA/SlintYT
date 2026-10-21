@@ -878,6 +878,7 @@ async fn worker(
                         prepare(&app, &View::Home);
                         let state = app.global::<AppState>();
                         state.set_comments(ModelRc::default());
+                        state.set_comments_total("".into());
                         state.set_recommendations(ModelRc::default());
                         state.set_save_playlists(ModelRc::default());
                         let (browser, profile) =

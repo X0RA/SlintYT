@@ -54,7 +54,7 @@ export component VideoDetails inherits Rectangle {
         }
         HorizontalLayout { spacing: 10px; alignment: start;
             ActionButton { text: "Up next"; quiet: true; active: AppState.player-detail-tab == 0; clicked => { root.save-open = false; AppState.player-detail-tab = 0; } }
-            ActionButton { text: "Comments" + (AppState.comments.length > 0 ? " · " + AppState.comments.length : ""); quiet: true; active: AppState.player-detail-tab == 1; clicked => { root.save-open = false; AppState.player-detail-tab = 1; } }
+            ActionButton { text: "Comments" + (AppState.comments-total != "" ? " · " + AppState.comments-total : AppState.comments.length > 0 ? " · " + AppState.comments.length + (AppState.comments-more ? "+" : "") : ""); quiet: true; active: AppState.player-detail-tab == 1; clicked => { root.save-open = false; AppState.player-detail-tab = 1; } }
         }
         Rectangle { height: 1px; background: Theme.border; }
         if AppState.player-detail-tab == 0 : VerticalLayout { spacing: 20px;

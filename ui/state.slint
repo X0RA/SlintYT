@@ -123,6 +123,8 @@ export global AppState {
     in-out property <[CommentData]> comments;
     in-out property <bool> comments-loading: false;
     in-out property <bool> comments-more: false;
+    // YouTube's total comment count, formatted. Empty when unknown.
+    in-out property <string> comments-total;
     in-out property <string> comments-error;
     in-out property <bool> comments-newest: false;
     in-out property <string> comment-draft;

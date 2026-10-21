@@ -354,6 +354,7 @@ pub(super) fn wire(
         ui.set_player_rich_description(slint::StyledText::default());
         ui.set_comments_loading(false);
         ui.set_comments_more(false);
+        ui.set_comments_total("".into());
         ui.set_comments_error("".into());
         ui.set_comment_draft("".into());
         ui.set_player_channel("".into());
@@ -419,6 +420,7 @@ pub(super) fn wire(
                         .map(youtube::video_item)
                         .collect::<Vec<_>>();
                     session.annotate(&mut recommendations);
+                    let comments_total = details.top_comments.count.map(youtube::number);
                     {
                         let mut d = data.lock().unwrap();
                         if !d.accepts(generation) {
@@ -496,6 +498,9 @@ pub(super) fn wire(
                             )));
                         }
                         ui.set_details_loading(false);
+                        if let Some(total) = comments_total {
+                            ui.set_comments_total(total.into());
+                        }
                         ui.set_player_channel(channel.name.clone().into());
                         ui.set_player_channel_id(channel.id.as_str().into());
                         ui.set_player_channel_initials(initials(&channel.name).into());
@@ -612,6 +617,7 @@ pub(super) fn wire(
             match result {
                 Ok(p) => {
                     let has_more = p.ctoken.is_some();
+                    let total = p.count.map(youtube::number);
                     let items = p.items.clone();
                     {
                         let mut d = data.lock().unwrap();
@@ -675,6 +681,9 @@ pub(super) fn wire(
                         ui.set_comments(ModelRc::new(VecModel::from(rows)));
                         ui.set_comments_more(has_more);
                         ui.set_comments_loading(false);
+                        if let Some(total) = total {
+                            ui.set_comments_total(total.into());
+                        }
                     });
                 }
                 Err(e) => update_discussion(&weak, &data, generation, move |app| {

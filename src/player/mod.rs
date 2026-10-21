@@ -1,5 +1,6 @@
 mod commands;
 mod gl;
+pub(crate) mod media_keys;
 mod native;
 pub(crate) mod progress;
 mod quality;
@@ -306,6 +307,7 @@ impl Playback {
         if start.position == 0. {
             state.set_player_duration(0.);
         }
+        media_keys::refresh(app);
         *self.selected.lock().unwrap() = start.quality.clone();
         if start.refresh {
             self.cache.lock().unwrap().invalidate(&id);
@@ -460,6 +462,7 @@ fn fail(app: &AppWindow, message: &str) {
     state.set_player_buffering(false);
     state.set_player_subtitles_loading(false);
     state.set_player_error(message.into());
+    media_keys::refresh(app);
 }
 
 pub fn install(app: &AppWindow, runtime: Handle) -> Arc<Playback> {
@@ -478,6 +481,7 @@ pub fn install(app: &AppWindow, runtime: Handle) -> Arc<Playback> {
     .ok()
     .map(Arc::new);
     let epoch = Arc::new(AtomicU64::new(0));
+    media_keys::init(runtime.clone());
     let report_tasks = progress::Tasks::default();
     let commands = engine.as_ref().map(|engine| {
         commands::start(
@@ -767,6 +771,7 @@ pub fn install(app: &AppWindow, runtime: Handle) -> Arc<Playback> {
             *owner.queue.lock().unwrap() = queue::Queue::default();
             state.set_player_fullscreen(false);
             app.window().set_fullscreen(false);
+            media_keys::refresh(&app);
         }
     });
     let (weak, owner) = (app.as_weak(), player.clone());

@@ -49,6 +49,8 @@ pub(super) enum Update {
     Progress(bool),
     Paused(bool),
     Position(f64),
+    Seeked(f64),
+    Speed(f64),
     Duration(f64),
     Volume(f64),
     Buffering(bool),
@@ -110,6 +112,17 @@ pub(super) fn publish(
         ) {
             return;
         }
+        let media = matches!(
+            update,
+            Update::Loaded
+                | Update::Paused(_)
+                | Update::Ended(_)
+                | Update::Duration(_)
+                | Update::Speed(_)
+        );
+        if let Update::Position(seconds) = update {
+            super::media_keys::position(seconds);
+        }
         match update {
             Update::Progress(ok) => state.set_player_progress_note(
                 if ok {
@@ -125,6 +138,11 @@ pub(super) fn publish(
             }
             Update::Paused(v) => state.set_player_paused(v),
             Update::Position(v) if v.is_finite() => state.set_player_position(v.max(0.) as f32),
+            Update::Seeked(v) if v.is_finite() => {
+                state.set_player_position(v.max(0.) as f32);
+                super::media_keys::seeked(v);
+            }
+            Update::Speed(v) if v.is_finite() && v > 0. => state.set_player_speed(v as f32),
             Update::Duration(v) if v.is_finite() => state.set_player_duration(v.max(0.) as f32),
             Update::Volume(v) if v.is_finite() => state.set_player_volume(v as f32),
             Update::Buffering(v) => state.set_player_buffering(v),
@@ -141,6 +159,9 @@ pub(super) fn publish(
             }
             Update::Error(error, status) => super::fail(&app, &playback_error(&error, status)),
             _ => {}
+        }
+        if media {
+            super::media_keys::refresh(&app);
         }
     });
 }
@@ -180,6 +201,7 @@ fn observer(engine: &Mpv) -> libmpv2::Result<Mpv> {
         (4, "volume", Format::Double),
         (5, "paused-for-cache", Format::Flag),
         (6, "eof-reached", Format::Flag),
+        (7, "speed", Format::Double),
     ] {
         client.observe_property(name, format, index)?;
     }
@@ -220,6 +242,7 @@ pub fn start(
     std::thread::spawn(move || {
         let mut events: Option<(u64, Mpv, Option<u16>)> = None;
         let mut loaded = false;
+        let mut seeking = false;
         let mut subtitle = None;
         let mut tracker: Option<super::progress::Tracker> = None;
         let mut sampled = Instant::now();
@@ -263,6 +286,7 @@ pub fn start(
                             tracker = None;
                             events = None;
                             loaded = false;
+                            seeking = false;
                             subtitle = None;
                             stop(&engine)
                         }
@@ -278,6 +302,7 @@ pub fn start(
                             tracker = None;
                             events = None;
                             loaded = false;
+                            seeking = false;
                             subtitle = None;
                             (|| {
                                 stop(&engine)?;
@@ -417,6 +442,7 @@ pub fn start(
                             None
                         }
                         Ok(Event::Seek) => {
+                            seeking = true;
                             // Also fires for our own seeks; the tracker ignores the repeat.
                             if let Some(tracker) = &mut tracker {
                                 tracker.seek(false);
@@ -427,7 +453,14 @@ pub fn start(
                             if let Some(tracker) = &mut tracker {
                                 tracker.restarted();
                             }
-                            None
+                            if std::mem::take(&mut seeking) {
+                                engine
+                                    .get_property::<f64>("time-pos")
+                                    .ok()
+                                    .map(Update::Seeked)
+                            } else {
+                                None
+                            }
                         }
                         Ok(Event::FileLoaded) => {
                             loaded = true;
@@ -444,6 +477,7 @@ pub fn start(
                         Ok(Event::PropertyChange { name, change, .. }) => match (name, change) {
                             ("pause", PropertyData::Flag(v)) => Some(Update::Paused(v)),
                             ("time-pos", PropertyData::Double(v)) => Some(Update::Position(v)),
+                            ("speed", PropertyData::Double(v)) => Some(Update::Speed(v)),
                             ("duration", PropertyData::Double(v)) => Some(Update::Duration(v)),
                             ("volume", PropertyData::Double(v)) => Some(Update::Volume(v)),
                             ("paused-for-cache", PropertyData::Flag(v)) => {

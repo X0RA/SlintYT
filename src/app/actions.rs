@@ -381,6 +381,7 @@ pub(super) fn wire(
                     ui.set_player_channel_initials(initials(&details.channel).into());
                     ui.set_player_channel_tone(tone(&details.channel));
                     ui.set_player_channel(details.channel.into());
+                    crate::player::media_keys::refresh(&app);
                     ui.set_player_channel_id(details.channel_id.into());
                     ui.set_player_channel_avatar(details.avatar.into());
                     ui.set_player_stats(details.stats.into());
@@ -502,6 +503,7 @@ pub(super) fn wire(
                             ui.set_comments_total(total.into());
                         }
                         ui.set_player_channel(channel.name.clone().into());
+                        crate::player::media_keys::refresh(&app);
                         ui.set_player_channel_id(channel.id.as_str().into());
                         ui.set_player_channel_initials(initials(&channel.name).into());
                         ui.set_player_channel_tone(tone(&channel.name));

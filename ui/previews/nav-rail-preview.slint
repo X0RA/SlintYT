@@ -1,6 +1,6 @@
 import { NavRail } from "../components/nav-rail.slint";
 import { AppState } from "../state.slint";
-import { Palette, ScrollView } from "std-widgets.slint";
+import { Palette, Button } from "std-widgets.slint";
 export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData } from "../state.slint";
 export component AppWindow inherits Window {
     title: "nav-rail preview"; preferred-width: 1100px; height: 760px; min-width: 480px; background: #0e0e10;
@@ -18,4 +18,10 @@ export component AppWindow inherits Window {
         AppState.recommendations = [{id:"abcdefghijk",title:"A recommended video",channel:"Workshop",initials:"W",metadata:"12K views · 1 day ago",duration:"12:34",thumbnail:@image-url("mock-thumbnail.svg")}];
     }
     NavRail { width: 80px; height: parent.height; active: 0; }
+    VerticalLayout { x: 110px; y: 24px; width: 260px; height: 200px; spacing: 8px;
+        Button { text: "Syncing"; clicked => { AppState.sync-running = true; AppState.sync-complete = false; AppState.sync-failed = false; AppState.sync-title = "Syncing watch history…"; } }
+        Button { text: "Up to date"; clicked => { AppState.sync-running = false; AppState.sync-complete = true; AppState.sync-failed = false; AppState.sync-title = "Up to date"; } }
+        Button { text: "Sync error"; clicked => { AppState.sync-running = false; AppState.sync-complete = false; AppState.sync-failed = true; AppState.sync-title = "Sync incomplete"; } }
+        Text { text: AppState.sync-menu-open ? "Sync menu requested" : AppState.account-menu-open ? "Account menu requested" : "Click a rail button"; color: #ededef; }
+    }
 }

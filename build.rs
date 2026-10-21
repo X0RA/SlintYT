@@ -15,6 +15,7 @@ fn main() {
                     "avatar",
                     "icon",
                     "nav-rail",
+                    "sync-menu",
                     "search-bar",
                     "library-row",
                     "settings",

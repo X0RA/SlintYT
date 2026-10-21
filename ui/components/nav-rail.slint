@@ -9,7 +9,7 @@ component RailItem inherits Rectangle {
     callback clicked();
     width: 78px; height: 66px;
     accessible-role: button; accessible-label: root.label; accessible-action-default => { root.clicked(); }
-    Rectangle { x: 13px; y: 4px; width: 52px; height: 32px; border-radius: 17px; background: root.active ? #26262c : touch.has-hover ? Theme.raised : transparent;
+    Rectangle { x: (parent.width - self.width) / 2; y: 4px; width: 52px; height: 32px; border-radius: 17px; background: root.active ? #26262c : touch.has-hover ? Theme.raised : transparent;
         Icon { width: 20px; height: 20px; name: root.icon; tint: root.active || touch.has-hover ? Theme.strong : Theme.muted; }
     }
     Text { y: 41px; width: parent.width; text: root.label; font-size: root.label == "Subscriptions" ? 10px : 11px; color: root.active ? Theme.strong : Theme.muted; font-weight: root.active ? 600 : 500; horizontal-alignment: center; }
@@ -19,6 +19,8 @@ export component NavRail inherits Rectangle {
     in property <bool> horizontal: false;
     in property <int> active;
     callback navigate(int);
+    function toggle-sync() { AppState.account-menu-open = false; AppState.sync-menu-open = !AppState.sync-menu-open; }
+    function toggle-account() { AppState.sync-menu-open = false; AppState.account-menu-open = !AppState.account-menu-open; }
     background: Theme.rail;
     if !root.horizontal : VerticalLayout {
         padding-top: 20px; padding-bottom: 16px; spacing: 6px; cross-axis-alignment: center;
@@ -29,35 +31,36 @@ export component NavRail inherits Rectangle {
         Rectangle { vertical-stretch: 1; background: transparent; }
         settings-nav := RailItem { icon: "settings"; label: "Settings"; active: root.active == 7; height: 48px; clicked => { root.navigate(7); } }
         refresh := Rectangle {
-            width: 80px; height: 44px; accessible-role: button; accessible-label: "Refresh feeds and watch history"; accessible-description: AppState.watch-note;
-            private property <bool> spinning: AppState.refreshing || AppState.busy;
+            width: 80px; height: 44px; accessible-role: button; accessible-label: "Sync status"; accessible-description: AppState.sync-title;
+            private property <bool> spinning: AppState.sync-running || AppState.refreshing;
             Rectangle {
-                width: 44px; height: 44px; border-radius: 22px; background: refresh-touch.has-hover ? Theme.raised : transparent;
+                width: 44px; height: 44px; border-radius: 22px; background: AppState.sync-menu-open ? #26262c : refresh-touch.has-hover ? Theme.raised : transparent;
                 // One turn every 900ms; mod keeps the angle small so the rotation stays smooth over long sessions.
                 Icon { width: 19px; height: 19px; name: "refresh"; tint: refresh-touch.has-hover ? Theme.text : Theme.muted;
                     transform-rotation: refresh.spinning ? mod(animation-tick() / 1ms, 900) / 900 * 360deg : 0deg; }
                 Rectangle { x: 27px; y: 10px; width: 7px; height: 7px; border-radius: 3.5px; border-width: 2px; border-color: Theme.rail;
-                    background: AppState.matches(AppState.watch-note,"up to date") ? Theme.success : Theme.subtle; }
+                    background: AppState.sync-failed ? #fda4af : AppState.sync-complete ? Theme.success : Theme.subtle; }
             }
-            refresh-touch := TouchArea { enabled: !AppState.busy; mouse-cursor: pointer; clicked => { AppState.reload(false); } }
-            accessible-action-default => { if !AppState.busy { AppState.reload(false); } }
+            refresh-touch := TouchArea { mouse-cursor: pointer; clicked => { root.toggle-sync(); } }
+            accessible-action-default => { root.toggle-sync(); }
         }
         account := Rectangle {
-            width: 80px; height: 48px; accessible-role: button; accessible-label: "Account menu"; accessible-action-default => { AppState.account-menu-open = !AppState.account-menu-open; }
+            width: 80px; height: 48px; accessible-role: button; accessible-label: "Account menu"; accessible-action-default => { root.toggle-account(); }
             Rectangle { y: 4px; width: 40px; height: 40px; border-radius: 20px; background: AppState.account-menu-open ? #26262c : Theme.raised; border-width: 1px; border-color: AppState.account-menu-open ? #3a3a42 : Theme.border;
                 Text { text: AppState.account-initial; font-size: 14px; font-weight: 600; color: Theme.text; horizontal-alignment: center; vertical-alignment: center; }
                 if AppState.account-avatar != "" : Avatar { width: parent.width - 2px; initials: AppState.account-initial; tone: Theme.raised; url: AppState.account-avatar; accessible-role: none; }
             }
-            TouchArea { mouse-cursor: pointer; clicked => { AppState.account-menu-open = !AppState.account-menu-open; } }
+            TouchArea { mouse-cursor: pointer; clicked => { root.toggle-account(); } }
         }
     }
     if root.horizontal : HorizontalLayout {
         alignment: space-around; spacing: 0px;
-        RailItem { icon: "home"; label: "Home"; active: root.active == 0; clicked => { root.navigate(0); } }
-        RailItem { icon: "subscriptions"; label: "Subscriptions"; active: root.active == 5 || root.active == 6; clicked => { root.navigate(5); } }
-        RailItem { icon: "history"; label: "History"; active: root.active == 1; clicked => { root.navigate(1); } }
-        RailItem { icon: "playlist"; label: "Playlists"; active: root.active == 3 || root.active == 4; clicked => { root.navigate(3); } }
-        RailItem { icon: "settings"; label: "Settings"; active: root.active == 7; clicked => { root.navigate(7); } }
-        RailItem { icon: "more"; label: "Account"; clicked => { AppState.account-menu-open = !AppState.account-menu-open; } }
+        RailItem { width: root.width / 7; icon: "home"; label: "Home"; active: root.active == 0; clicked => { root.navigate(0); } }
+        RailItem { width: root.width / 7; icon: "subscriptions"; label: "Subscriptions"; active: root.active == 5 || root.active == 6; clicked => { root.navigate(5); } }
+        RailItem { width: root.width / 7; icon: "history"; label: "History"; active: root.active == 1; clicked => { root.navigate(1); } }
+        RailItem { width: root.width / 7; icon: "playlist"; label: "Playlists"; active: root.active == 3 || root.active == 4; clicked => { root.navigate(3); } }
+        RailItem { width: root.width / 7; icon: "settings"; label: "Settings"; active: root.active == 7; clicked => { root.navigate(7); } }
+        RailItem { width: root.width / 7; icon: "refresh"; label: "Sync"; clicked => { root.toggle-sync(); } }
+        RailItem { width: root.width / 7; icon: "more"; label: "Account"; clicked => { root.toggle-account(); } }
     }
 }

@@ -7,6 +7,7 @@ import { VideoPlayer } from "views/video-player.slint";
 import { SettingsPage } from "views/settings.slint";
 import { AppLoading } from "components/app-loading.slint";
 import { NavRail } from "components/nav-rail.slint";
+import { SyncMenu } from "components/sync-menu.slint";
 import { SearchBar } from "components/search-bar.slint";
 import { ActionButton } from "components/action-button.slint";
 import { Avatar } from "components/avatar.slint";
@@ -25,6 +26,7 @@ export component AppContent inherits Rectangle {
     function navigate(kind: int) {
         app-keys.focus();
         AppState.account-menu-open = false;
+        AppState.sync-menu-open = false;
         AppState.player-sidebar-open = false;
         if AppState.player-open { AppState.player-close(); }
         if root.active == kind && !AppState.settings-open { AppState.scroll-reset += 1; return; }
@@ -75,6 +77,17 @@ export component AppContent inherits Rectangle {
         background: #00000099;
         TouchArea { clicked => { AppState.player-sidebar-open = false; } }
         NavRail { x: 0px; y: 0px; width: 80px; height: parent.height; active: root.active; navigate(kind) => { root.navigate(kind); } }
+    }
+    if AppState.sync-menu-open && !AppState.initializing && !AppState.setup-open : Rectangle {
+        TouchArea { clicked => { AppState.sync-menu-open = false; } }
+        sync-menu := SyncMenu {
+            x: root.narrow ? max(8px, parent.width - self.width - 8px) : 72px;
+            y: max(8px, parent.height - self.height - (root.narrow ? 72px : 68px));
+            running: AppState.sync-running; complete: AppState.sync-complete; failed: AppState.sync-failed;
+            count: AppState.sync-count; status: AppState.sync-title; detail: AppState.sync-detail; warning: AppState.sync-warning;
+            can-sync: AppState.connected && !AppState.busy && !AppState.refreshing;
+            sync-now => { AppState.reload(false); }
+        }
     }
     if AppState.account-menu-open && !AppState.initializing && !AppState.setup-open : Rectangle {
         TouchArea { clicked => { AppState.account-menu-open = false; } }
@@ -145,6 +158,6 @@ export component AppContent inherits Rectangle {
     }
     Timer { interval: 3500ms; running: AppState.toast != ""; triggered => { AppState.toast = ""; } }
     KeyBinding { keys: @keys(Slash); enabled: !AppState.player-open && !AppState.initializing && !AppState.setup-open; activated => { AppState.search-focus-serial += 1; } }
-    KeyBinding { keys: @keys(Escape); enabled: !AppState.player-open && !AppState.initializing && !AppState.setup-open; activated => { AppState.account-menu-open = false; AppState.search-text = ""; app-keys.focus(); } }
+    KeyBinding { keys: @keys(Escape); enabled: !AppState.initializing && !AppState.setup-open && (!AppState.player-open || AppState.sync-menu-open); activated => { AppState.sync-menu-open = false; AppState.account-menu-open = false; if !AppState.player-open { AppState.search-text = ""; app-keys.focus(); } } }
     }
 }

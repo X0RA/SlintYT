@@ -22,6 +22,14 @@ export global AppState {
     in-out property <string> page-title: "Recommended for you";
     in-out property <string> page-subtitle: "A home feed from your YouTube account";
     in-out property <string> watch-note;
+    in-out property <bool> sync-menu-open: false;
+    in-out property <bool> sync-running: false;
+    in-out property <bool> sync-complete: false;
+    in-out property <bool> sync-failed: false;
+    in-out property <string> sync-count: "0";
+    in-out property <string> sync-title: "Not synced yet";
+    in-out property <string> sync-detail;
+    in-out property <string> sync-warning;
     in-out property <string> search-text;
     in-out property <string> playlist-input;
     in-out property <string> account-label;

@@ -281,6 +281,10 @@ impl Session {
         self.watch_index.read().unwrap().note()
     }
 
+    pub fn sync_status(&self) -> crate::watch::SyncStatus {
+        self.watch_index.read().unwrap().sync_status()
+    }
+
     pub async fn page(
         &self,
         view: &View,
@@ -463,7 +467,12 @@ async fn sync_history(
             let Ok(overlap) = pass.page(&ids) else {
                 break;
             };
-            index.write().unwrap().ids.extend(ids);
+            {
+                let mut state = index.write().unwrap();
+                state.ids.extend(ids);
+                state.scanned = pass.observed.len();
+                state.pages = page_number;
+            }
             let reached_end = page.continuation.is_none();
             if reached_end || overlap {
                 cache = pass.finish(&cache, reached_end, history::now());

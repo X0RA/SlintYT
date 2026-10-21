@@ -72,6 +72,7 @@ pub fn wire(app: &AppWindow) -> (tokio::runtime::Runtime, Arc<crate::player::Pla
             if let Some(app) = weak.upgrade() {
                 let state = app.global::<AppState>();
                 state.set_account_menu_open(false);
+                state.set_sync_menu_open(false);
                 state.invoke_player_close();
             }
             let _ = send.send(Command::ConnectSaved(index as usize));
@@ -141,6 +142,7 @@ pub fn wire(app: &AppWindow) -> (tokio::runtime::Runtime, Arc<crate::player::Pla
             state.set_initializing(false);
             state.set_startup_failed(false);
             state.set_account_menu_open(false);
+            state.set_sync_menu_open(false);
             state.set_settings_open(false);
             state.set_setup_open(true);
             state.set_busy(true);
@@ -486,6 +488,17 @@ fn picker_rows(profiles: &[Selection], current: Option<&Selection>) -> (Vec<Brow
     (rows, selected)
 }
 
+fn apply_sync_status(app: &AppWindow, status: crate::watch::SyncStatus) {
+    let state = app.global::<AppState>();
+    state.set_sync_running(status.running);
+    state.set_sync_complete(status.complete);
+    state.set_sync_failed(status.failed);
+    state.set_sync_count(status.count.to_string().into());
+    state.set_sync_title(status.title.into());
+    state.set_sync_detail(status.detail.into());
+    state.set_sync_warning(status.warning.into());
+}
+
 fn publish_watch(weak: &slint::Weak<AppWindow>, session: &Session, videos: &mut [Video]) {
     session.annotate(videos);
     let flags: Vec<_> = videos
@@ -500,7 +513,9 @@ fn publish_watch(weak: &slint::Weak<AppWindow>, session: &Session, videos: &mut 
         })
         .collect();
     let note = session.watch_note();
+    let sync = session.sync_status();
     update(weak, move |app| {
+        apply_sync_status(&app, sync);
         let state = app.global::<AppState>();
         state.set_watch_note(note.into());
         let model = state.get_videos();
@@ -838,6 +853,7 @@ async fn worker(
                     let epoch = generation.fetch_add(1, Ordering::Relaxed) + 1;
                     watch_changes = new_session.watch_updates();
                     let note = new_session.watch_note();
+                    let sync = new_session.sync_status();
                     player.set_session(&new_session);
                     session = Some(Arc::new(new_session));
                     *session_slot.write().unwrap() = session.clone();
@@ -858,6 +874,7 @@ async fn worker(
                     images.clear();
                     let label = selection.label();
                     update_startup(&weak, &cancel, move |app| {
+                        apply_sync_status(&app, sync);
                         prepare(&app, &View::Home);
                         let state = app.global::<AppState>();
                         state.set_comments(ModelRc::default());

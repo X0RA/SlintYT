@@ -1,0 +1,27 @@
+import { Button, Palette } from "std-widgets.slint";
+import { SyncMenu } from "../components/sync-menu.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData } from "../state.slint";
+export component AppWindow inherits Window {
+    title: "Sync menu preview"; preferred-width: 760px; preferred-height: 520px; background: #0e0e10;
+    in-out property <int> example: 0;
+    init => { Palette.color-scheme = ColorScheme.dark; }
+    HorizontalLayout { x: 16px; y: 16px; width: parent.width - 32px; height: 36px; spacing: 6px;
+        Button { text: "Up to date"; clicked => { root.example = 0; } }
+        Button { text: "Syncing"; clicked => { root.example = 1; } }
+        Button { text: "Error"; clicked => { root.example = 2; } }
+        Button { text: "Empty"; clicked => { root.example = 3; } }
+        Button { text: "Long text"; clicked => { root.example = 4; } }
+        Button { text: "Not synced"; clicked => { root.example = 5; } }
+    }
+    SyncMenu {
+        x: (parent.width - self.width) / 2; y: 90px;
+        running: root.example == 1;
+        complete: root.example == 0 || root.example == 3 || root.example == 4;
+        failed: root.example == 2;
+        count: root.example == 3 || root.example == 5 ? "0" : root.example == 4 ? "123456789" : "1273";
+        status: root.example == 1 ? "Syncing watch history…" : root.example == 2 ? "Sync incomplete" : root.example == 5 ? "Not synced yet" : "Up to date";
+        detail: root.example == 1 ? "420 videos checked this sync · 14 pages loaded" : root.example == 2 ? "Could not finish syncing. Your synced history is kept; try again." : root.example == 5 ? "Sync your history to update watched labels." : "Your available YouTube watch history is synced.";
+        warning: root.example == 4 ? "History could not be saved on this device. It will be checked again next time." : "";
+        sync-now => { root.example = 1; }
+    }
+}

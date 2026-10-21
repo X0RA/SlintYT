@@ -1,5 +1,6 @@
 import { Button, Palette } from "std-widgets.slint";
 import { VideoPlayer } from "../views/video-player.slint";
+import { SyncMenu } from "../components/sync-menu.slint";
 import { AppState } from "../state.slint";
 export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData } from "../state.slint";
 
@@ -20,6 +21,7 @@ export component AppWindow inherits Window {
     }
     VerticalLayout {
         HorizontalLayout {
+            Button { text: "Sync popover"; clicked => { AppState.sync-menu-open = true; player.focus(); } }
             Button { text: "Subtitles loading"; clicked => { AppState.player-subtitles-loading = !AppState.player-subtitles-loading; } }
             Button { text: "No subtitles"; clicked => { AppState.player-subtitles-loading = false; AppState.player-subtitles = ["Off"]; AppState.player-subtitle-index = 0; AppState.player-subtitle-note = "No subtitles available."; } }
             Button { text: "Subtitle error"; clicked => { AppState.player-subtitles-loading = false; AppState.player-subtitle-index = 0; AppState.player-subtitle-note = "Could not load subtitles. Try another track or refresh streams."; } }
@@ -38,7 +40,7 @@ export component AppWindow inherits Window {
             Button { text: "Error"; clicked => { AppState.player-loading = false; AppState.player-buffering = false; AppState.player-error = "This video is unavailable. Check your connection and retry."; } }
             Button { text: "Compact"; clicked => { root.width = 720px; root.height = 650px; AppState.player-title = "A very long video title that should elide without pushing the Back button off the screen"; } }
         }
-        VideoPlayer {
+        player := VideoPlayer {
             select-subtitle(index) => { AppState.player-subtitle-index = index; AppState.player-subtitle-note = ""; }
             select-quality(index) => { AppState.player-quality-index = index; }
             toggle => { AppState.player-paused = !AppState.player-paused; AppState.player-ended = false; }
@@ -46,5 +48,10 @@ export component AppWindow inherits Window {
             seek(value) => { AppState.player-position = value; }
             toggle-fullscreen => { AppState.player-fullscreen = !AppState.player-fullscreen; }
         }
+    }
+    if AppState.sync-menu-open : SyncMenu {
+        x: 20px; y: 160px; complete: true; count: "1273"; status: "Up to date";
+        detail: "Press Escape to dismiss this popover before closing the player.";
+        sync-now => { AppState.sync-menu-open = false; }
     }
 }

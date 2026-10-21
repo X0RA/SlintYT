@@ -1,0 +1,54 @@
+import { Theme } from "../theme.slint";
+import { MenuSurface } from "menu-item.slint";
+import { Icon } from "icon.slint";
+import { ActionButton } from "action-button.slint";
+
+export component SyncMenu inherits MenuSurface {
+    in property <bool> running;
+    in property <bool> complete;
+    in property <bool> failed;
+    in property <bool> can-sync: true;
+    in property <string> count: "0";
+    in property <string> status: "Not synced yet";
+    in property <string> detail;
+    in property <string> warning;
+    callback sync-now();
+    private property <color> tone: root.failed ? #fda4af : root.complete ? Theme.success : Theme.muted;
+    width: 300px; height: content.preferred-height; border-radius: 14px;
+    // Keep clicks inside the surface from dismissing the popover.
+    TouchArea {}
+    content := VerticalLayout {
+        padding: 18px; spacing: 14px;
+        HorizontalLayout { spacing: 10px; cross-axis-alignment: center;
+            Rectangle { width: 34px; height: 34px; border-radius: 17px; background: root.complete ? #4ade801a : Theme.raised;
+                Icon { name: root.complete ? "check" : "refresh"; width: 18px; height: 18px; tint: root.tone;
+                    transform-rotation: root.running ? mod(animation-tick() / 1ms, 900) / 900 * 360deg : 0deg;
+                }
+            }
+            VerticalLayout { spacing: 4px;
+                Text { text: "Watch history"; color: Theme.text; font-size: 14px; font-weight: 600; }
+                sync-status := Text { text: root.status; color: root.tone; font-size: 12px; wrap: word-wrap; }
+            }
+        }
+        Rectangle { height: 1px; background: Theme.border; }
+        VerticalLayout { spacing: 4px;
+            sync-count := Text { text: root.count; color: Theme.strong; font-size: 26px; font-weight: 600; overflow: elide; }
+            Text { text: root.count == "1" ? "watched video synced" : "watched videos synced"; color: Theme.muted; font-size: 12px; }
+        }
+        if root.running || root.complete : Rectangle {
+            height: 4px; border-radius: 2px; background: Theme.border; clip: true;
+            accessible-role: progress-indicator; accessible-label: root.running ? "Syncing watch history" : "Watch history up to date";
+            Rectangle { height: parent.height; width: root.running ? parent.width * 0.3 : parent.width; border-radius: 2px;
+                x: root.running ? mod(animation-tick() / 1ms, 1500) / 1500 * (parent.width + self.width) - self.width : 0px;
+                background: root.complete ? Theme.success : Theme.muted;
+            }
+        }
+        sync-detail := Text { text: root.detail; color: Theme.muted; font-size: 12px; wrap: word-wrap; }
+        if root.warning != "" : Text { text: root.warning; color: #fda4af; font-size: 12px; wrap: word-wrap; }
+        HorizontalLayout { alignment: end;
+            sync-now := ActionButton { text: root.running ? "Syncing…" : root.failed ? "Try again" : "Sync now"; outlined: true; height: 34px;
+                enabled: root.can-sync && !root.running; clicked => { root.sync-now(); }
+            }
+        }
+    }
+}

@@ -25,11 +25,20 @@ export component AppWindow inherits Window {
         AppState.active-profile = 1;
         AppState.videos = [{ id: "abcdefghijk", title: "Building a desktop app with Rust and Slint", channel: "Example channel", initials:"EC", tone:#3b4a63, thumbnail:@image-url("mock-thumbnail.svg"), metadata: "12K views · 2 days ago", duration: "24:10", watched: 1, watch-progress: 42 }, { id: "lmnopqrstuv", title: "A very long title that wraps cleanly without hiding channel information", channel: "Workshop", initials:"W", tone:#5e4a35, thumbnail:@image-url("mock-thumbnail.svg"), metadata: "3K views · 1 week ago", duration: "1:12:36", watched: 2, watch-progress: -1 }, { id: "12345678901", title: "Live from the studio", channel: "Studio", initials:"S", tone:#3e5a4c, thumbnail:@image-url("mock-thumbnail.svg"), metadata: "Streaming now", duration: "LIVE", watched: 0, watch-progress: -1 }, { id: "abcdefghijl", title: "The quiet side of the city", channel: "On foot", initials:"OF", tone:#5a3f5e, thumbnail:@image-url("mock-thumbnail.svg"), metadata: "8K views · 3 days ago", duration: "18:27" }];
         AppState.watch-note = "Using cached watch history · 1273 watched videos. Refreshing recent watches…";
+        AppState.sync-count = "1273";
+        AppState.sync-title = "Up to date";
+        AppState.sync-complete = true;
+        AppState.sync-detail = "Your available YouTube watch history is synced.";
         AppState.sections = [{ start: 0, count: 3 }, { start: 3, count: 1 }];
         AppState.has-more = true;
         AppState.profiles = [{ label: "Chromium · Default", name: "Default", path: "/example/.config/chromium/Default", group: "Chromium", root: "~/.config/chromium", initials: "C", tone: #2e414e, first: true }];
     }
     VerticalLayout {
+        HorizontalLayout {
+            Button { text: "Sync progress"; clicked => { AppState.sync-menu-open = true; AppState.account-menu-open = false; AppState.sync-running = true; AppState.sync-complete = false; AppState.sync-failed = false; AppState.sync-title = "Checking recent watches…"; AppState.sync-detail = "90 videos checked this sync · 3 pages loaded"; } }
+            Button { text: "Sync complete"; clicked => { AppState.sync-menu-open = true; AppState.account-menu-open = false; AppState.sync-running = false; AppState.sync-complete = true; AppState.sync-failed = false; AppState.sync-title = "Up to date"; AppState.sync-detail = "Your available YouTube watch history is synced."; } }
+            Button { text: "Sync error"; clicked => { AppState.sync-menu-open = true; AppState.account-menu-open = false; AppState.sync-running = false; AppState.sync-complete = false; AppState.sync-failed = true; AppState.sync-title = "Sync incomplete"; AppState.sync-detail = "Could not finish syncing. Your synced history is kept; try again."; } }
+        }
         HorizontalLayout {
             Button { text: "Saved profiles"; clicked => { AppState.account-menu-open = true; } }
             Button { text: "Long names"; clicked => { AppState.saved-profiles = [

@@ -95,6 +95,8 @@ export component VideoPlayer inherits Rectangle {
     }
     background: black;
     forward-focus: keys;
+    private property <bool> sync-menu-visible: AppState.sync-menu-open;
+    changed sync-menu-visible => { if !root.sync-menu-visible { keys.focus(); } }
     init => { keys.focus(); }
     keys := FocusScope {
         // More comments load as the page nears its end, the same way the feeds do.
@@ -288,6 +290,6 @@ export component VideoPlayer inherits Rectangle {
         KeyBinding { keys: @keys(L); activated => { root.seek(AppState.player-position + 10); } }
         KeyBinding { keys: @keys(UpArrow); enabled: page.content-y >= -1px; activated => { root.volume-changed(min(100,AppState.player-volume + 5)); } }
         KeyBinding { keys: @keys(DownArrow); enabled: page.content-y >= -1px; activated => { root.volume-changed(max(0,AppState.player-volume - 5)); } }
-        KeyBinding { keys: @keys(Escape); activated => { if root.menu != 0 { root.menu = 0; } else if AppState.player-sidebar-open { AppState.player-sidebar-open = false; } else if AppState.player-fullscreen { root.toggle-fullscreen(); } else if AppState.player-pip { AppState.player-toggle-pip(); } else { root.close(); } } }
+        KeyBinding { keys: @keys(Escape); activated => { if AppState.sync-menu-open { AppState.sync-menu-open = false; } else if root.menu != 0 { root.menu = 0; } else if AppState.player-sidebar-open { AppState.player-sidebar-open = false; } else if AppState.player-fullscreen { root.toggle-fullscreen(); } else if AppState.player-pip { AppState.player-toggle-pip(); } else { root.close(); } } }
     }
 }

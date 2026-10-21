@@ -23,6 +23,18 @@ pub struct WatchIndex {
     pub failed: bool,
     pub phase: Phase,
     pub cache_unavailable: bool,
+    pub scanned: usize,
+    pub pages: u64,
+}
+
+pub struct SyncStatus {
+    pub running: bool,
+    pub complete: bool,
+    pub failed: bool,
+    pub count: usize,
+    pub title: String,
+    pub detail: String,
+    pub warning: String,
 }
 
 impl WatchIndex {
@@ -37,6 +49,8 @@ impl WatchIndex {
         }
         self.complete = false;
         self.failed = false;
+        self.scanned = 0;
+        self.pages = 0;
         self.phase = if full && cache.last_full_sync.is_some() {
             Phase::Reconciling
         } else if full {
@@ -44,6 +58,50 @@ impl WatchIndex {
         } else {
             Phase::Refreshing
         };
+    }
+
+    pub fn sync_status(&self) -> SyncStatus {
+        let running = !self.complete && !self.failed && !matches!(self.phase, Phase::Idle);
+        let title = if self.failed {
+            "Sync incomplete"
+        } else if self.complete {
+            "Up to date"
+        } else {
+            match self.phase {
+                Phase::Building => "Syncing watch history…",
+                Phase::Refreshing => "Checking recent watches…",
+                Phase::Reconciling => "Checking history changes…",
+                Phase::Idle => "Not synced yet",
+            }
+        };
+        SyncStatus {
+            running,
+            complete: self.complete && !self.failed,
+            failed: self.failed,
+            count: self.ids.len(),
+            title: title.into(),
+            detail: if running {
+                format!(
+                    "{} {} checked this sync · {} {} loaded",
+                    self.scanned,
+                    if self.scanned == 1 { "video" } else { "videos" },
+                    self.pages,
+                    if self.pages == 1 { "page" } else { "pages" }
+                )
+            } else if self.failed {
+                "Could not finish syncing. Your synced history is kept; try again.".into()
+            } else if self.complete {
+                "Your available YouTube watch history is synced.".into()
+            } else {
+                "Sync your history to update watched labels.".into()
+            },
+            warning: if self.cache_unavailable {
+                "History could not be saved on this device. It will be checked again next time."
+                    .into()
+            } else {
+                String::new()
+            },
+        }
     }
 
     pub fn annotate(&self, items: &mut [Video]) {
@@ -105,6 +163,44 @@ impl WatchIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sync_status_reports_live_counts_and_distinguishes_failure_from_completion() {
+        let cache = HistoryCache {
+            ids: ["abcdefghijk".into(), "lmnopqrstuv".into()].into(),
+            last_sync: 1_000_000,
+            last_full_sync: Some(1_000_000),
+            ..Default::default()
+        };
+        let mut index = WatchIndex::default();
+        index.begin(&cache, false, 1_000_060);
+        let status = index.sync_status();
+        assert!(status.running);
+        assert!(!status.complete);
+        assert_eq!(status.count, 2);
+        index.ids.insert("12345678901".into());
+        index.scanned = 1;
+        index.pages = 1;
+        assert_eq!(index.sync_status().count, 3);
+        assert!(index.sync_status().detail.contains("1 video checked"));
+        index.failed = true;
+        let failed = index.sync_status();
+        assert!(!failed.running && failed.failed && !failed.complete);
+        assert_eq!(failed.count, 3);
+        index.failed = false;
+        index.complete = true;
+        index.phase = Phase::Idle;
+        index.cache_unavailable = true;
+        let complete = index.sync_status();
+        assert!(complete.complete && !complete.running);
+        assert_eq!(complete.title, "Up to date");
+        assert!(!complete.warning.is_empty());
+        index.begin(&HistoryCache::default(), true, 1_000_060);
+        assert_eq!(index.scanned, 0);
+        assert_eq!(index.pages, 0);
+        assert_eq!(index.sync_status().count, 0);
+        assert!(index.sync_status().running);
+    }
 
     #[test]
     fn cached_hints_cannot_resurrect_reconciled_deletions() {

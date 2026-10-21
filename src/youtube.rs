@@ -438,25 +438,43 @@ async fn sync_history(
     loop {
         let pass_started = Instant::now();
         let mut pass = SyncPass::new(&cache, history::now());
-        index
-            .write()
-            .unwrap()
-            .begin(&cache, pass.full, history::now());
+        let resumed = pass.resume_from.take();
+        let first_page = resumed.as_ref().map_or(1, |(_, _, pages)| pages + 1);
+        {
+            let mut state = index.write().unwrap();
+            state.begin(&cache, pass.full, history::now());
+            state.ids.extend(pass.observed.iter().cloned());
+            state.scanned = pass.observed.len();
+            state.pages = first_page - 1;
+        }
         updates.send_replace({
             version += 1;
             version
         });
-        let mut token = None::<String>;
-        let mut visitor = None::<String>;
+        let (mut token, mut visitor) = match &resumed {
+            Some((token, visitor, _)) => (Some(token.clone()), visitor.clone()),
+            None => (None, None),
+        };
         let mut seen_tokens = HashSet::new();
         let mut finished = false;
+        let mut resume_failed = false;
         // Only a successful end-of-history response may remove cached IDs.
         // Invalid IDs, repeated tokens and timeouts keep uncertainty. Large
         // accounts must be able to reach the end rather than restart at a cap.
-        for page_number in 1_u64.. {
+        for page_number in first_page.. {
             let request = history_page(&client, token.as_deref(), visitor.as_deref());
-            let Ok(Ok(page)) = tokio::time::timeout(Duration::from_secs(60), request).await else {
-                break;
+            let page = match tokio::time::timeout(Duration::from_secs(60), request).await {
+                Ok(Ok(page)) => page,
+                Ok(Err(e)) => {
+                    eprintln!("History sync stopped at page {page_number}: {e:#}");
+                    resume_failed = page_number == first_page && resumed.is_some();
+                    break;
+                }
+                Err(_) => {
+                    eprintln!("History sync stopped at page {page_number}: timed out");
+                    resume_failed = page_number == first_page && resumed.is_some();
+                    break;
+                }
             };
             let ids: Vec<_> = page
                 .videos
@@ -465,6 +483,7 @@ async fn sync_history(
                 .map(|v| v.id)
                 .collect();
             let Ok(overlap) = pass.page(&ids) else {
+                eprintln!("History sync stopped at page {page_number}: invalid video ID");
                 break;
             };
             {
@@ -499,26 +518,39 @@ async fn sync_history(
                 version += 1;
                 version
             });
-            // Save initial progress without claiming the index is complete.
-            if cache.last_full_sync.is_none() && page_number % 10 == 0 {
-                let partial = pass.partial(&cache, history::now());
-                let saved = save_history(&store, &partial).await;
-                index.write().unwrap().cache_unavailable = !saved;
-            }
             let Some(next) = page.continuation else {
                 unreachable!();
             };
             if !seen_tokens.insert(next.clone()) {
+                eprintln!("History sync stopped at page {page_number}: repeated continuation");
                 break;
             }
             token = Some(next);
             if page.visitor_data.is_some() {
                 visitor = page.visitor_data;
             }
+            // Save full-pass progress without claiming the index is complete.
+            if pass.full && page_number % 10 == 0 {
+                let next = token
+                    .as_deref()
+                    .map(|t| (t, visitor.as_deref(), page_number));
+                let partial = pass.partial(&cache, next, history::now());
+                let saved = save_history(&store, &partial).await;
+                index.write().unwrap().cache_unavailable = !saved;
+            }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
         if !finished {
-            let partial = pass.partial(&cache, history::now());
+            if resume_failed {
+                pass.abandon_resume();
+            }
+            // `token` is the page that failed, so the next attempt retries it.
+            let pages = index.read().unwrap().pages;
+            let next = token
+                .as_deref()
+                .filter(|_| !resume_failed)
+                .map(|t| (t, visitor.as_deref(), pages));
+            let partial = pass.partial(&cache, next, history::now());
             let saved = save_history(&store, &partial).await;
             cache = partial;
             let mut state = index.write().unwrap();
@@ -528,6 +560,13 @@ async fn sync_history(
                 version += 1;
                 version
             });
+            if resume_failed {
+                // A stale resume point should not cost a 10 minute wait.
+                continue;
+            }
+        } else if resumed.is_some() {
+            // Pick up anything watched while the resumed pass was interrupted.
+            continue;
         }
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(10 * 60)) => {},
@@ -862,6 +901,22 @@ fn collect(
                 return Ok(());
             }
             if let Some(section) = object.get("itemSectionRenderer") {
+                // History keeps a day's date header after every video from that
+                // day was removed. Only a bare header counts as an empty day.
+                if section.get("contents").is_none()
+                    && section.get("items").is_none()
+                    && section.as_object().is_some_and(|fields| {
+                        fields.contains_key("header")
+                            && fields.keys().all(|key| {
+                                matches!(
+                                    key.as_str(),
+                                    "header" | "trackingParams" | "sectionIdentifier" | "targetId"
+                                )
+                            })
+                    })
+                {
+                    return Ok(());
+                }
                 let date = text(&section["header"]["itemSectionHeaderRenderer"]["title"]);
                 let date = history_date.map(|previous| {
                     if date.is_empty() {
@@ -1145,9 +1200,11 @@ fn legacy_playlist(r: &Value) -> Option<Video> {
 
 fn lockup_video(r: &Value) -> Option<Video> {
     let playlist = r["contentType"].as_str() == Some("LOCKUP_CONTENT_TYPE_PLAYLIST");
+    // History can also list a Short as a standalone lockup outside the Shorts shelf.
+    let short = r["contentType"].as_str() == Some("LOCKUP_CONTENT_TYPE_SHORT");
     if r["contentType"]
         .as_str()
-        .is_some_and(|kind| kind != "LOCKUP_CONTENT_TYPE_VIDEO" && !playlist)
+        .is_some_and(|kind| kind != "LOCKUP_CONTENT_TYPE_VIDEO" && !playlist && !short)
     {
         return None;
     }
@@ -1218,9 +1275,13 @@ fn lockup_video(r: &Value) -> Option<Video> {
         metadata: combined_metadata,
         // Badges have moved between thumbnailOverlayBadgeViewModel and
         // thumbnailBottomOverlayViewModel, so search the overlays for any badge.
-        duration: find_renderer(&image["overlays"], "thumbnailBadgeViewModel")
-            .map(|badge| text(&badge["text"]))
-            .unwrap_or_default(),
+        duration: if short {
+            "SHORT".into()
+        } else {
+            find_renderer(&image["overlays"], "thumbnailBadgeViewModel")
+                .map(|badge| text(&badge["text"]))
+                .unwrap_or_default()
+        },
         thumbnail: thumbnail(&image["image"]["sources"]),
         playlist,
         watched,
@@ -1792,6 +1853,39 @@ mod tests {
         assert_eq!(page.videos.len(), 2);
         assert!(page.videos.iter().all(|v| v.watch_hint == WATCHED));
         assert_eq!(page.continuation.as_deref(), Some("next"));
+    }
+
+    #[test]
+    fn history_day_with_only_a_date_header_is_an_empty_day() {
+        let day = |date: &str, contents: Option<Value>| {
+            let mut section = json!({"header": {"itemSectionHeaderRenderer": {"title": {"simpleText": date}}}, "trackingParams": "x"});
+            if let Some(contents) = contents {
+                section["contents"] = contents;
+            }
+            json!({"itemSectionRenderer": section})
+        };
+        let short = json!([{"shortsLockupViewModel": {"onTap": {"innertubeCommand": {"reelWatchEndpoint": {"videoId": "abcdefghijk"}}}, "overlayMetadata": {"primaryText": {"content": "Short"}}}}]);
+        let response = json!({"onResponseReceivedActions": [{"appendContinuationItemsAction": {"continuationItems": [
+            day("Apr 26", Some(short)),
+            day("Apr 23", None),
+            {"continuationItemRenderer": {"continuationEndpoint": {"continuationCommand": {"token": "next"}}}}
+        ]}}]});
+        let page = parse_page(&response.to_string(), ParseMode::History).unwrap();
+        assert_eq!(page.videos.len(), 1);
+        assert_eq!(page.continuation.as_deref(), Some("next"));
+        // Shorts can also arrive as a standalone lockup instead of in the shelf.
+        let lockup = json!({"onResponseReceivedActions": [{"appendContinuationItemsAction": {"continuationItems": [
+            {"itemSectionRenderer": {"header": {}, "contents": [{"lockupViewModel": {"contentId": "ldeJxFeBY9w", "contentType": "LOCKUP_CONTENT_TYPE_SHORT", "metadata": {"lockupMetadataViewModel": {"title": {"content": "A short"}, "metadata": {"contentMetadataViewModel": {"metadataRows": [{"metadataParts": [{"text": {"content": "A channel"}}, {"text": {"content": "4.1M views"}}]}]}}}}, "contentImage": {"thumbnailViewModel": {"image": {"sources": []}, "overlays": []}}}}]}}
+        ]}}]});
+        let page = parse_page(&lockup.to_string(), ParseMode::History).unwrap();
+        assert_eq!(page.videos[0].id, "ldeJxFeBY9w");
+        assert_eq!(page.videos[0].duration, "SHORT");
+        assert_eq!(page.videos[0].watch_hint, WATCHED);
+        // A section with unknown fields and no contents is still unfamiliar.
+        let unknown = json!({"onResponseReceivedActions": [{"appendContinuationItemsAction": {"continuationItems": [
+            {"itemSectionRenderer": {"header": {}, "futureVideoList": []}}
+        ]}}]});
+        assert!(parse_page(&unknown.to_string(), ParseMode::History).is_err());
     }
 
     #[test]

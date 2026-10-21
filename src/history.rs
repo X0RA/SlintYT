@@ -20,6 +20,7 @@ const CACHE_VERSION: u32 = 2;
 const RECENT_LIMIT: usize = 200;
 const OVERLAP_LENGTH: usize = 20;
 const MAX_CACHE_BYTES: u64 = 64 * 1024 * 1024;
+const RESUME_SECONDS: u64 = 24 * 60 * 60;
 
 pub fn now() -> u64 {
     SystemTime::now()
@@ -109,6 +110,38 @@ pub struct HistoryCache {
     pub recent: Vec<String>,
     pub last_sync: u64,
     pub last_full_sync: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume: Option<Resume>,
+}
+
+/// Where an interrupted full pass stopped, so the next attempt continues from
+/// that page instead of rescanning the newest history again. The pass's own
+/// observations are kept separately, because only they may replace the index.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Resume {
+    pub token: String,
+    pub visitor: Option<String>,
+    pub pages: u64,
+    pub started: u64,
+    observed: HashSet<String>,
+    recent: Vec<String>,
+}
+
+impl Resume {
+    fn valid(&self) -> bool {
+        !self.token.is_empty()
+            && self.token.len() <= 4096
+            && self.visitor.as_ref().is_none_or(|v| v.len() <= 4096)
+            && self.recent.len() <= RECENT_LIMIT
+            && self.observed.iter().all(|id| video_id(id))
+            && self.recent.iter().all(|id| self.observed.contains(id))
+    }
+
+    /// Continuation tokens expire, and a pass that started long ago would
+    /// miss too much newer history.
+    fn fresh(&self, now: u64) -> bool {
+        self.started <= now && now - self.started < RESUME_SECONDS
+    }
 }
 
 impl HistoryCache {
@@ -189,11 +222,20 @@ impl HistoryStore {
         {
             bail!("History cache is invalid");
         }
+        if history
+            .resume
+            .as_ref()
+            .is_some_and(|resume| !resume.valid())
+        {
+            // An expired or malformed resume point only costs a rescan.
+            history.resume = None;
+        }
         if record.version == 1 {
             // The old parser omitted Shorts. Preserve positive evidence but
             // require a complete scan, even if the previous cache was recent.
             history.last_full_sync = None;
             history.recent.clear();
+            history.resume = None;
         }
         Ok(Some(history))
     }
@@ -261,19 +303,29 @@ pub struct SyncPass {
     overlap: usize,
     overlap_needed: usize,
     found_overlap: bool,
+    started: u64,
+    /// Continuation token, visitor data and page count to start from.
+    pub resume_from: Option<(String, Option<String>, u64)>,
 }
 
 impl SyncPass {
     pub fn new(cache: &HistoryCache, now: u64) -> Self {
         let anchors: HashSet<_> = cache.recent.iter().cloned().collect();
+        let full = cache.full_due(now) || anchors.is_empty();
+        let resume = cache
+            .resume
+            .as_ref()
+            .filter(|resume| full && resume.valid() && resume.fresh(now));
         Self {
-            full: cache.full_due(now) || anchors.is_empty(),
-            observed: HashSet::new(),
-            recent: Vec::new(),
+            full,
+            observed: resume.map(|r| r.observed.clone()).unwrap_or_default(),
+            recent: resume.map(|r| r.recent.clone()).unwrap_or_default(),
             overlap_needed: OVERLAP_LENGTH.min(anchors.len()),
             anchors,
             overlap: 0,
             found_overlap: false,
+            started: resume.map_or(now, |r| r.started),
+            resume_from: resume.map(|r| (r.token.clone(), r.visitor.clone(), r.pages)),
         }
     }
 
@@ -317,16 +369,42 @@ impl SyncPass {
             } else {
                 cache.last_full_sync
             },
+            resume: None,
         }
     }
 
-    pub fn partial(&self, cache: &HistoryCache, now: u64) -> HistoryCache {
+    /// `next` is the continuation token and visitor data of the first page
+    /// this pass has not processed yet, along with the pages already loaded.
+    pub fn partial(
+        &self,
+        cache: &HistoryCache,
+        next: Option<(&str, Option<&str>, u64)>,
+        now: u64,
+    ) -> HistoryCache {
         let mut result = cache.clone();
         result.ids.extend(self.observed.iter().cloned());
         // Preserve the last full-check time, so a failed weekly reconciliation
         // stays due instead of making old cached entries look newly verified.
         result.last_sync = now;
+        result.resume = next
+            .filter(|_| self.full)
+            .map(|(token, visitor, pages)| Resume {
+                token: token.into(),
+                visitor: visitor.map(str::to_owned),
+                pages,
+                started: self.started,
+                observed: self.observed.clone(),
+                recent: self.recent.clone(),
+            });
         result
+    }
+
+    /// The resume point failed before loading a page. Forget it, so the next
+    /// attempt starts over from the newest history.
+    pub fn abandon_resume(&mut self) {
+        self.resume_from = None;
+        self.observed.clear();
+        self.recent.clear();
     }
 }
 
@@ -389,6 +467,7 @@ mod tests {
             recent: ids(0..200),
             last_sync: now,
             last_full_sync: Some(now),
+            resume: None,
         }
     }
 
@@ -480,7 +559,7 @@ mod tests {
         let now = 1_000_000 + FULL_REFRESH_SECONDS;
         let mut pass = SyncPass::new(&cache, now);
         pass.page(&ids(500..505)).unwrap();
-        let partial = pass.partial(&cache, now);
+        let partial = pass.partial(&cache, None, now);
         assert!(partial.ids.contains(&id(450)));
         assert!(partial.ids.contains(&id(503)));
         assert!(partial.full_due(now));
@@ -492,7 +571,7 @@ mod tests {
     fn interrupted_initial_history_remains_incomplete_after_restart() {
         let mut pass = SyncPass::new(&HistoryCache::default(), 1_000_000);
         assert!(!pass.page(&ids(0..50)).unwrap());
-        let partial = pass.partial(&HistoryCache::default(), 1_000_000);
+        let partial = pass.partial(&HistoryCache::default(), None, 1_000_000);
         let root = tempfile::tempdir().unwrap();
         let store = HistoryStore {
             legacy_root: None,
@@ -504,6 +583,74 @@ mod tests {
         assert_eq!(cache.ids.len(), 50);
         assert!(cache.last_full_sync.is_none());
         assert!(SyncPass::new(&cache, 1_000_100).full);
+    }
+
+    #[test]
+    fn interrupted_full_pass_resumes_from_its_last_page_after_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let store = HistoryStore {
+            legacy_root: None,
+            root: root.path().join("history"),
+            account: account("user", None),
+        };
+        // Stale IDs from an older attempt must not survive a resumed pass.
+        let mut stale = HistoryCache::default();
+        stale.ids.insert(id(900));
+        let mut pass = SyncPass::new(&stale, 1_000_000);
+        assert!(pass.resume_from.is_none());
+        pass.page(&ids(0..50)).unwrap();
+        store
+            .save(&pass.partial(&stale, Some(("page-44", Some("visitor"), 43)), 1_000_100))
+            .unwrap();
+
+        let cache = store.load().unwrap().unwrap();
+        let mut resumed = SyncPass::new(&cache, 1_000_200);
+        assert_eq!(
+            resumed.resume_from,
+            Some(("page-44".into(), Some("visitor".into()), 43))
+        );
+        assert_eq!(resumed.observed.len(), 50);
+        resumed.page(&ids(50..80)).unwrap();
+        let done = resumed.finish(&cache, true, 1_000_300);
+        assert_eq!(done.ids.len(), 80);
+        assert!(!done.ids.contains(&id(900)));
+        assert_eq!(&done.recent[..50], ids(0..50));
+        assert!(done.resume.is_none());
+        assert_eq!(done.last_full_sync, Some(1_000_300));
+        // With recent anchors restored, the follow-up pass is incremental.
+        assert!(!SyncPass::new(&done, 1_000_400).full);
+    }
+
+    #[test]
+    fn stale_or_abandoned_resume_points_start_over() {
+        let mut pass = SyncPass::new(&HistoryCache::default(), 1_000_000);
+        pass.page(&ids(0..50)).unwrap();
+        let partial = pass.partial(
+            &HistoryCache::default(),
+            Some(("next", None, 10)),
+            1_000_000,
+        );
+        assert!(
+            SyncPass::new(&partial, 1_000_000 + RESUME_SECONDS)
+                .resume_from
+                .is_none()
+        );
+        let mut resumed = SyncPass::new(&partial, 1_000_100);
+        assert!(resumed.resume_from.is_some());
+        resumed.abandon_resume();
+        let retry = resumed.partial(&partial, None, 1_000_200);
+        assert!(retry.resume.is_none());
+        assert_eq!(retry.ids.len(), 50);
+        assert!(SyncPass::new(&retry, 1_000_300).resume_from.is_none());
+        // Incremental refreshes never record a resume point.
+        let mut incremental = SyncPass::new(&full_cache(1_000_000), 1_000_060);
+        incremental.page(&ids(500..505)).unwrap();
+        assert!(
+            incremental
+                .partial(&full_cache(1_000_000), Some(("next", None, 1)), 1_000_060)
+                .resume
+                .is_none()
+        );
     }
 
     #[test]

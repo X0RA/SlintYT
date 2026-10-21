@@ -4,7 +4,9 @@ export component Icon inherits Image {
     in property <color> tint: Theme.muted;
     width: 22px; height: 22px;
     colorize: root.tint;
-    source: root.name == "home" ? @image-url("../images/home.svg")
+    source: root.name == "bookmark" ? @image-url("../images/bookmark.svg")
+        : root.name == "bookmark-filled" ? @image-url("../images/bookmark-filled.svg")
+        : root.name == "home" ? @image-url("../images/home.svg")
         : root.name == "subscriptions" ? @image-url("../images/subscriptions.svg")
         : root.name == "history" ? @image-url("../images/history.svg")
         : root.name == "settings" ? @image-url("../images/settings.svg")

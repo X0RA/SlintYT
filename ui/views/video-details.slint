@@ -1,3 +1,4 @@
+import { BookmarkButton } from "../components/bookmark-button.slint";
 import { Spinner, ScrollView } from "std-widgets.slint";
 import { PillInput } from "../components/pill-input.slint";
 import { MenuItem, MenuSurface } from "../components/menu-item.slint";
@@ -35,9 +36,10 @@ export component VideoDetails inherits Rectangle {
             }
             ActionButton { height: 36px; text: AppState.player-subscribed ? "Subscribed" : "Subscribe"; primary: !AppState.player-subscribed; active: AppState.player-subscribed; enabled: AppState.player-channel-id != "" && !AppState.action-busy; clicked => { AppState.toggle-subscription(AppState.player-channel-id,!AppState.player-subscribed); } }
             Rectangle { horizontal-stretch: 1; }
-            ActionButton { height: 40px; icon-size: 18px; tip: "Like"; icon: "like"; text: root.width > 700px ? "Like" : ""; active: AppState.player-liked; enabled: !AppState.action-busy; clicked => { AppState.toggle-like(); } }
-            ActionButton { height: 40px; icon-size: 18px; tip: "Save"; icon: "save"; text: root.width > 700px ? "Save" : ""; active: root.save-open; clicked => { root.save-open = !root.save-open; } }
-            ActionButton { height: 40px; icon-size: 18px; tip: "Copy link"; icon: "link"; text: root.width > 700px ? "Copy link" : ""; clicked => { AppState.copy-link("https://www.youtube.com/watch?v=" + AppState.player-video-id); } }
+            ActionButton { height: 40px; icon-size: 18px; tip: "Like"; icon: "like"; text: root.width > (AppState.bookmarks-enabled ? 1000px : 700px) ? "Like" : ""; active: AppState.player-liked; enabled: !AppState.action-busy; clicked => { AppState.toggle-like(); } }
+            ActionButton { height: 40px; icon-size: 18px; tip: "Save"; icon: "save"; text: root.width > (AppState.bookmarks-enabled ? 1000px : 700px) ? "Save" : ""; active: root.save-open; clicked => { root.save-open = !root.save-open; } }
+            if AppState.bookmarks-enabled : BookmarkButton { video-id: AppState.player-video-id; show-label: root.width > 1000px; }
+            ActionButton { height: 40px; icon-size: 18px; tip: "Copy link"; icon: "link"; text: root.width > (AppState.bookmarks-enabled ? 1000px : 700px) ? "Copy link" : ""; clicked => { AppState.copy-link("https://www.youtube.com/watch?v=" + AppState.player-video-id); } }
         }
         Rectangle {
             background: Theme.surface; border-radius: 14px;

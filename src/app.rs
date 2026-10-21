@@ -17,6 +17,7 @@ use tokio::sync::{mpsc, watch};
 
 mod actions;
 mod avatars;
+mod bookmarks;
 mod folders;
 mod shorts;
 
@@ -36,6 +37,7 @@ enum Command {
         origin: Option<Arc<Session>>,
     },
     PlaylistChanged {
+        bookmarks_current: bool,
         playlist: String,
         session: Arc<Session>,
     },
@@ -64,6 +66,13 @@ pub fn wire(app: &AppWindow) -> (tokio::runtime::Runtime, Arc<crate::player::Pla
         runtime.handle().clone(),
         session_slot.clone(),
         sender.clone(),
+    );
+    bookmarks::wire(
+        app,
+        runtime.handle().clone(),
+        session_slot.clone(),
+        sender.clone(),
+        generation.clone(),
     );
     let ui = app.global::<AppState>();
     let (send, weak) = (sender.clone(), app.as_weak());
@@ -737,14 +746,24 @@ async fn worker(
             }
             Command::Connect(selection) => connect = Some(selection),
             Command::PlaylistChanged {
+                bookmarks_current,
                 playlist,
                 session: origin,
             } => {
                 if !session.as_ref().is_some_and(|s| Arc::ptr_eq(s, &origin)) {
                     continue;
                 }
-                if let Some(cache) = &origin.cache {
+                if !bookmarks_current && let Some(cache) = &origin.cache {
                     cache.invalidate("pages-v1").await;
+                }
+                if !bookmarks_current
+                    && let Some(bookmarks) = origin.bookmarks.clone()
+                    && bookmarks.snapshot().enabled
+                    && bookmarks.snapshot().preferences.id() == playlist
+                {
+                    tokio::spawn(async move {
+                        let _ = bookmarks.refresh().await;
+                    });
                 }
                 reload_pages = pages.invalidate_playlist(&playlist, &current_view, &mut feed);
                 let Some(_) = reload_pages else { continue };
@@ -855,6 +874,11 @@ async fn worker(
                     let note = new_session.watch_note();
                     let sync = new_session.sync_status();
                     player.set_session(&new_session);
+                    if let Some(old) = &session
+                        && let Some(bookmarks) = &old.bookmarks
+                    {
+                        bookmarks.suspend();
+                    }
                     session = Some(Arc::new(new_session));
                     *session_slot.write().unwrap() = session.clone();
                     if let Some(session) = session.clone() {

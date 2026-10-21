@@ -1,9 +1,13 @@
+import { BookmarkButton } from "bookmark-button.slint";
 import { Theme } from "../theme.slint";
 import { AppState, VideoData } from "../state.slint";
 import { Avatar } from "avatar.slint";
 import { Icon } from "icon.slint";
 export component VideoCard inherits Rectangle {
     in property <VideoData> video;
+    in property <int> bookmark-membership: AppState.bookmark-state(root.video.id, AppState.bookmark-epoch);
+    callback bookmark-toggle(string);
+    bookmark-toggle(id) => { AppState.toggle-bookmark(id); }
     in property <bool> enabled: true;
     in property <bool> compact: false;
     in property <bool> show-watched: true;
@@ -67,5 +71,9 @@ export component VideoCard inherits Rectangle {
     if root.channel-links && root.video.channel-id != "" : TouchArea {
         x: 14px; y: parent.height - 53px; width: parent.width - 100px; height: 22px; mouse-cursor: pointer;
         clicked => { AppState.open-channel(root.video.channel-id, 0, 0, ""); }
+    }
+    if AppState.bookmarks-enabled && !root.video.playlist : BookmarkButton {
+        x: 13px; y: 63px; video-id: root.video.id; membership: root.bookmark-membership; toggled => { root.bookmark-toggle(root.video.id); }
+        reveal: touch.has-hover || AppState.view-kind == 9;
     }
 }

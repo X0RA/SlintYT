@@ -16,7 +16,7 @@ use rustypipe::cache::CacheStorage;
 use serde::{Deserialize, Serialize};
 
 pub const FULL_REFRESH_SECONDS: u64 = 7 * 24 * 60 * 60;
-const CACHE_VERSION: u32 = 2;
+const CACHE_VERSION: u32 = 3;
 const RECENT_LIMIT: usize = 200;
 const OVERLAP_LENGTH: usize = 20;
 const MAX_CACHE_BYTES: u64 = 64 * 1024 * 1024;
@@ -106,6 +106,10 @@ impl CacheStorage for IdentityCapture {
 
 #[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HistoryCache {
+    #[serde(default)]
+    pub ordered: Vec<String>,
+    #[serde(default)]
+    pub order_complete: bool,
     pub ids: HashSet<String>,
     pub recent: Vec<String>,
     pub last_sync: u64,
@@ -124,6 +128,8 @@ pub struct Resume {
     pub pages: u64,
     pub started: u64,
     observed: HashSet<String>,
+    #[serde(default)]
+    ordered: Vec<String>,
     recent: Vec<String>,
 }
 
@@ -210,9 +216,10 @@ impl HistoryStore {
         }
         let record: Record = serde_json::from_slice(&data)?;
         let mut history = record.history;
-        if !matches!(record.version, 1 | CACHE_VERSION)
+        if !matches!(record.version, 1 | 2 | CACHE_VERSION)
             || record.account != self.account
             || !record.account.valid()
+            || history.ordered.iter().any(|id| !history.ids.contains(id))
             || history.ids.iter().any(|id| !video_id(id))
             || history.recent.len() > RECENT_LIMIT
             || history.recent.iter().any(|id| !history.ids.contains(id))
@@ -229,6 +236,10 @@ impl HistoryStore {
         {
             // An expired or malformed resume point only costs a rescan.
             history.resume = None;
+        }
+        if record.version < 3 {
+            history.ordered.clear();
+            history.order_complete = false;
         }
         if record.version == 1 {
             // The old parser omitted Shorts. Preserve positive evidence but
@@ -286,7 +297,7 @@ impl HistoryStore {
     }
 }
 
-fn video_id(id: &str) -> bool {
+pub(crate) fn video_id(id: &str) -> bool {
     id.len() == 11
         && id
             .bytes()
@@ -298,6 +309,7 @@ fn video_id(id: &str) -> bool {
 pub struct SyncPass {
     pub full: bool,
     pub observed: HashSet<String>,
+    ordered: Vec<String>,
     recent: Vec<String>,
     anchors: HashSet<String>,
     overlap: usize,
@@ -310,15 +322,21 @@ pub struct SyncPass {
 
 impl SyncPass {
     pub fn new(cache: &HistoryCache, now: u64) -> Self {
+        Self::with_order(cache, now, false)
+    }
+    pub fn with_order(cache: &HistoryCache, now: u64, require_order: bool) -> Self {
         let anchors: HashSet<_> = cache.recent.iter().cloned().collect();
-        let full = cache.full_due(now) || anchors.is_empty();
-        let resume = cache
-            .resume
-            .as_ref()
-            .filter(|resume| full && resume.valid() && resume.fresh(now));
+        let full =
+            cache.full_due(now) || anchors.is_empty() || (require_order && !cache.order_complete);
+        let resume = cache.resume.as_ref().filter(|resume| {
+            full && resume.valid()
+                && resume.fresh(now)
+                && resume.ordered.len() == resume.observed.len()
+        });
         Self {
             full,
             observed: resume.map(|r| r.observed.clone()).unwrap_or_default(),
+            ordered: resume.map(|r| r.ordered.clone()).unwrap_or_default(),
             recent: resume.map(|r| r.recent.clone()).unwrap_or_default(),
             overlap_needed: OVERLAP_LENGTH.min(anchors.len()),
             anchors,
@@ -337,6 +355,7 @@ impl SyncPass {
             if !self.observed.insert(id.clone()) {
                 continue;
             }
+            self.ordered.push(id.clone());
             if self.recent.len() < RECENT_LIMIT {
                 self.recent.push(id.clone());
             }
@@ -360,7 +379,19 @@ impl SyncPass {
             cache.ids.clone()
         };
         ids.extend(self.observed.iter().cloned());
+        let mut ordered = self.ordered.clone();
+        if !reached_end {
+            ordered.extend(
+                cache
+                    .ordered
+                    .iter()
+                    .filter(|id| !self.observed.contains(*id))
+                    .cloned(),
+            );
+        }
         HistoryCache {
+            ordered,
+            order_complete: reached_end || cache.order_complete,
             ids,
             recent: self.recent.clone(),
             last_sync: now,
@@ -394,6 +425,7 @@ impl SyncPass {
                 pages,
                 started: self.started,
                 observed: self.observed.clone(),
+                ordered: self.ordered.clone(),
                 recent: self.recent.clone(),
             });
         result
@@ -404,6 +436,7 @@ impl SyncPass {
     pub fn abandon_resume(&mut self) {
         self.resume_from = None;
         self.observed.clear();
+        self.ordered.clear();
         self.recent.clear();
     }
 }
@@ -463,12 +496,63 @@ mod tests {
     }
     fn full_cache(now: u64) -> HistoryCache {
         HistoryCache {
+            ordered: ids(0..500),
+            order_complete: true,
             ids: ids(0..500).into_iter().collect(),
             recent: ids(0..200),
             last_sync: now,
             last_full_sync: Some(now),
             resume: None,
         }
+    }
+
+    #[test]
+    fn ordered_history_survives_incremental_sync_and_full_reconciliation() {
+        let original = full_cache(1_000_000);
+        let mut pass = SyncPass::new(&original, 1_000_010);
+        assert!(!pass.full);
+        let mut page = vec![id(450), id(501), id(450)];
+        page.extend(ids(0..30));
+        assert!(pass.page(&page).unwrap());
+        let refreshed = pass.finish(&original, false, 1_000_010);
+        assert_eq!(&refreshed.ordered[..2], &[id(450), id(501)]);
+        assert_eq!(refreshed.ordered.len(), 501);
+        assert_eq!(
+            refreshed.ordered.iter().filter(|v| **v == id(450)).count(),
+            1
+        );
+        let mut full = SyncPass::new(&refreshed, 1_000_010 + FULL_REFRESH_SECONDS + 1);
+        full.page(&[id(501), id(450)]).unwrap();
+        let done = full.finish(&refreshed, true, 2_000_000);
+        assert_eq!(done.ordered, vec![id(501), id(450)]);
+        assert!(done.order_complete);
+    }
+
+    #[test]
+    fn unordered_cache_does_not_force_a_full_scan_without_bookmarks() {
+        let mut cache = full_cache(1_000_000);
+        cache.ordered.clear();
+        cache.order_complete = false;
+        assert!(!SyncPass::new(&cache, 1_000_010).full);
+        assert!(SyncPass::with_order(&cache, 1_000_010, true).full);
+    }
+
+    #[test]
+    fn old_unordered_history_requires_rebuild_without_losing_watched_ids() {
+        let mut cache = full_cache(1_000_000);
+        cache.ordered.clear();
+        cache.order_complete = false;
+        let mut pass = SyncPass::with_order(&cache, 1_000_010, true);
+        assert!(pass.full);
+        pass.page(&ids(500..530)).unwrap();
+        let partial = pass.partial(&cache, Some(("next", None, 1)), 1_000_020);
+        assert!(!partial.order_complete);
+        assert_eq!(partial.ids.len(), 530);
+        let mut resumed = SyncPass::with_order(&partial, 1_000_030, true);
+        resumed.page(&ids(0..500)).unwrap();
+        let done = resumed.finish(&partial, true, 1_000_040);
+        assert_eq!(done.ordered.len(), 530);
+        assert_eq!(&done.ordered[..30], ids(500..530));
     }
 
     #[test]

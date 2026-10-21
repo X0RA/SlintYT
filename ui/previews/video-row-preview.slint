@@ -6,7 +6,9 @@ export component AppWindow inherits Window {
     title: "Playlist video row preview";
     width: 900px; height: 680px;
     background: #0f0f0f;
-    init => { Palette.color-scheme = ColorScheme.dark; }
+    init => {
+        AppState.bookmarks-enabled = true;
+        AppState.connected = true;
     private property <string> last-played: "Select a video row";
     VerticalLayout {
         padding: 24px;

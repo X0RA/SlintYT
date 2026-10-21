@@ -1,0 +1,42 @@
+import { Theme } from "../theme.slint";
+import { AppState } from "../state.slint";
+import { Icon } from "icon.slint";
+import { Spinner } from "std-widgets.slint";
+export component BookmarkButton inherits Rectangle {
+    in property <string> video-id;
+    in property <bool> reveal: true;
+    callback toggled();
+    toggled => { AppState.toggle-bookmark(root.video-id); }
+    in property <bool> show-label: false;
+    in property <int> membership: AppState.bookmark-state(root.video-id, AppState.bookmark-epoch);
+    private property <bool> pending: root.membership >= 3;
+    private property <bool> saved: root.membership == 2 || root.membership == 4;
+    private property <bool> shown: root.reveal || touch.has-hover || keys.has-focus || root.pending;
+    private property <bool> usable: AppState.bookmarks-enabled && root.video-id != "" && root.membership > 0 && !root.pending;
+    width: root.show-label ? content.preferred-width : 36px; height: root.show-label ? 40px : 36px;
+    horizontal-stretch: 0;
+    border-radius: self.height / 2;
+    background: root.shown ? (touch.has-hover ? #34343de8 : #111114dc) : transparent;
+    border-width: keys.has-focus ? 1px : 0px; border-color: Theme.accent;
+    accessible-role: button;
+    accessible-label: root.pending ? "Updating bookmark" : root.saved ? "Remove bookmark" : "Bookmark video";
+    accessible-description: root.saved ? "Remove this video from your bookmark playlist" : "Add this video to your bookmark playlist";
+    accessible-enabled: root.usable;
+    accessible-action-default => { if root.usable { keys.focus(); root.toggled(); } }
+    forward-focus: keys;
+    content := HorizontalLayout {
+        opacity: root.shown ? 1 : 0;
+        padding-left: root.show-label ? 16px : 9px; padding-right: root.show-label ? 16px : 9px;
+        spacing: root.show-label ? 8px : 0px; alignment: center; cross-axis-alignment: center;
+        if root.pending : Spinner { width: 18px; height: 18px; }
+        if !root.pending : Icon { name: root.saved ? "bookmark-filled" : "bookmark"; tint: root.membership == 0 ? Theme.subtle : Theme.strong; width: 18px; height: 18px; }
+        if root.show-label : Text { text: root.pending ? "Updating…" : root.saved ? "Bookmarked" : "Bookmark"; color: Theme.text; font-size: 13px; font-weight: root.saved ? 600 : 400; }
+    }
+    touch := TouchArea { mouse-cursor: root.usable ? pointer : default; clicked => { if root.usable { keys.focus(); root.toggled(); } } }
+    if touch.has-hover : Rectangle {
+        x: 0px; y: root.height + 5px; width: tip.preferred-width + 16px; height: 28px;
+        background: #25252df5; border-radius: 6px;
+        tip := Text { text: root.pending ? "Updating bookmark…" : root.membership == 0 ? "Syncing bookmarks…" : root.saved ? "Remove bookmark" : "Bookmark video"; color: Theme.text; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+    }
+    keys := FocusScope { focus-on-click: false; enabled: AppState.bookmarks-enabled; key-pressed(event) => { if root.usable && (event.text == "\n" || event.text == " ") { root.toggled(); return accept; } return reject; } }
+}

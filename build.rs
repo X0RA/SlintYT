@@ -5,6 +5,8 @@ fn main() {
             assert!(
                 [
                     "app-content",
+                    "bookmark-button",
+                    "bookmarks-settings",
                     "app-loading",
                     "browser-picker",
                     "video-feed",

@@ -1,0 +1,19 @@
+import { BookmarkButton } from "../components/bookmark-button.slint";
+import { AppState } from "../state.slint";
+import { Button, Palette } from "std-widgets.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData } from "../state.slint";
+export component AppWindow inherits Window {
+    title: "bookmark-button preview"; preferred-width: 620px; preferred-height: 620px;
+    in-out property <int> mock-state: 2;
+    in-out property <int> toggle-count: 0;
+    init => { Palette.color-scheme = ColorScheme.dark; AppState.bookmarks-enabled = true; AppState.connected = true;
+        AppState.bookmark-destination-label = "slintyt-bookmarks · PRIVATE";
+        AppState.bookmark-choices = [{title:"My bookmarks · PRIVATE",url:"mock"},{title:"A very long playlist title for checking layout · PUBLIC",url:"public"}];
+    }
+    HorizontalLayout { padding: 24px; spacing: 20px;
+        BookmarkButton { membership: root.mock-state; toggled => { root.toggle-count += 1; root.mock-state = root.mock-state == 2 ? 1 : 2; } video-id: "abcdefghijk"; show-label: true; }
+        BookmarkButton { membership: root.mock-state; toggled => { root.toggle-count += 1; root.mock-state = root.mock-state == 2 ? 1 : 2; } video-id: "abcdefghijk"; }
+        Text { text: "Toggles: " + root.toggle-count; }
+        Button { text: "Cycle state"; clicked => { root.mock-state = mod(root.mock-state + 1, 5); AppState.bookmark-epoch += 1; } }
+    }
+}

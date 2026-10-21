@@ -251,6 +251,7 @@ impl Playback {
             state.get_breadcrumbs().iter().collect::<Vec<_>>()
         } else {
             state.set_player_origin(match state.get_view_kind() {
+                9 => "Bookmarks".into(),
                 1 => "History".into(),
                 4 => state.get_page_title(),
                 5 | 6 => "Subscriptions".into(),

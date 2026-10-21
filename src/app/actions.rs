@@ -972,10 +972,24 @@ pub(super) fn wire(
             );
         });
     });
-    let (weak, rt, sessions) = (app.as_weak(), runtime.clone(), slot.clone());
+    let (weak, rt, sessions, save_sender) =
+        (app.as_weak(), runtime.clone(), slot.clone(), sender.clone());
     state.on_save_video(move |playlist| {
-        let Some(app)=weak.upgrade() else{return};let ui=app.global::<AppState>();if ui.get_action_busy(){return;}ui.set_action_busy(true);let id=ui.get_player_video_id().to_string();
-        let (weak,session)=(weak.clone(),sessions.read().unwrap().clone());rt.spawn(async move {let result=if let Some(session)=session{request(&session,"browse/edit_playlist",json!({"playlistId":playlist.as_str(),"actions":[{"action":"ACTION_ADD_VIDEO","addedVideoId":id}]})).await.map(|_|())}else{Err("Connect a browser first.".into())};toast(&weak,result,"Video saved to playlist".into());});
+        let Some(app) = weak.upgrade() else { return };
+        let ui = app.global::<AppState>();
+        if ui.get_action_busy() { return; }
+        ui.set_action_busy(true);
+        let id = ui.get_player_video_id().to_string();
+        let (weak, session, sender) = (weak.clone(), sessions.read().unwrap().clone(), save_sender.clone());
+        rt.spawn(async move {
+            let result = if let Some(session) = &session {
+                request(session, "browse/edit_playlist", json!({"playlistId":playlist.as_str(),"actions":[{"action":"ACTION_ADD_VIDEO","addedVideoId":id}]})).await.map(|_| ())
+            } else { Err("Connect a browser first.".into()) };
+            if result.is_ok() && let Some(session) = session {
+                let _ = sender.send(Command::PlaylistChanged { bookmarks_current: false, playlist: playlist.to_string(), session });
+            }
+            toast(&weak, result, "Video saved to playlist".into());
+        });
     });
     let (weak, rt, sessions) = (app.as_weak(), runtime.clone(), slot.clone());
     state.on_edit_playlist(move |index, destination| {
@@ -1024,7 +1038,11 @@ pub(super) fn wire(
             if result.is_ok()
                 && let Some(session) = session
             {
-                let _ = sender.send(Command::PlaylistChanged { playlist, session });
+                let _ = sender.send(Command::PlaylistChanged {
+                    bookmarks_current: false,
+                    playlist,
+                    session,
+                });
             }
             toast(
                 &weak,

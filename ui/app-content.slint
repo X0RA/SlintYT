@@ -34,6 +34,7 @@ export component AppContent inherits Rectangle {
         if kind == 0 { AppState.load-feed(false); }
         else if kind == 1 { AppState.load-feed(true); }
         else if kind == 3 { AppState.open-playlists(); }
+        else if kind == 9 { AppState.open-bookmarks(); }
         else if kind == 5 { AppState.open-subscriptions(false); }
     }
     private property <int> clipboard-serial: AppState.clipboard-serial;

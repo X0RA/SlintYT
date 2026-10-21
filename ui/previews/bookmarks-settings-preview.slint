@@ -1,0 +1,24 @@
+import { BookmarksSettings } from "../components/bookmarks-settings.slint";
+import { AppState } from "../state.slint";
+import { Button, Palette } from "std-widgets.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData } from "../state.slint";
+export component AppWindow inherits Window {
+    title: "bookmarks-settings preview"; preferred-width: 620px; preferred-height: 620px;
+    in-out property <int> mock-state: 2;
+    init => { Palette.color-scheme = ColorScheme.dark; AppState.bookmarks-enabled = true; AppState.connected = true;
+        AppState.bookmark-destination-label = "slintyt-bookmarks · PRIVATE";
+        AppState.bookmark-choices = [{title:"My bookmarks · PRIVATE",url:"mock"},{title:"A very long playlist title for checking layout · PUBLIC",url:"public"}];
+    }
+    VerticalLayout { padding: 24px; spacing: 16px;
+        HorizontalLayout {
+            Button { text: "Loading"; clicked => { AppState.bookmarks-busy = !AppState.bookmarks-busy; } }
+            Button { text: "Error"; clicked => { AppState.bookmarks-error = AppState.bookmarks-error == "" ? "Could not load bookmarks. Please retry." : ""; } }
+            Button { text: "Empty"; clicked => { AppState.bookmark-choices = []; } }
+        }
+        BookmarksSettings {
+        enable-changed(value) => { AppState.bookmarks-enabled = value; }
+        destination-changed(mode, id) => { AppState.bookmark-mode = mode; AppState.bookmark-destination-id = id; }
+        retry => { AppState.bookmarks-error = ""; }
+    }
+    }
+}

@@ -57,6 +57,7 @@ pub struct Page {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum View {
     Home,
+    Bookmarks,
     History,
     Search(String),
     Playlists,
@@ -74,6 +75,7 @@ pub enum View {
 impl View {
     pub fn kind(&self) -> i32 {
         match self {
+            Self::Bookmarks => 9,
             Self::Home => 0,
             Self::History => 1,
             Self::Search(_) => 2,
@@ -87,6 +89,7 @@ impl View {
 
     pub fn title(&self) -> String {
         match self {
+            Self::Bookmarks => "Bookmarks".into(),
             Self::Home => "Recommended for you".into(),
             Self::History => "Watch history".into(),
             Self::Search(query) => format!("Results for “{query}”"),
@@ -100,6 +103,7 @@ impl View {
 
     pub fn subtitle(&self) -> String {
         match self {
+            Self::Bookmarks => "Your bookmarked videos".into(),
             Self::Home => "A home feed from your YouTube account".into(),
             Self::History => "Videos you’ve watched on YouTube".into(),
             Self::Search(_) => "Videos and playlists from YouTube".into(),
@@ -140,6 +144,8 @@ pub fn playlist_id(input: &str) -> Result<String> {
 }
 
 pub struct Session {
+    pub bookmarks: Option<Arc<crate::bookmarks::Bookmarks>>,
+    pub bookmarks_error: String,
     pub cache: Option<crate::cache::Cache>,
     pub progress: Option<Arc<crate::player::progress::Client>>,
     playback_cookies: Arc<str>,
@@ -222,7 +228,20 @@ impl Session {
         ));
         let progress =
             crate::player::progress::Client::new(client.clone(), &cookies, &identity).ok();
+        let (bookmarks, bookmarks_error) = match identity.account() {
+            Some(account) => match crate::bookmarks::Bookmarks::new(
+                account.filename(),
+                client.clone(),
+                cache_store.clone(),
+            ) {
+                Ok(b) => (Some(Arc::new(b)), String::new()),
+                Err(e) => (None, format!("Could not initialise bookmarks: {e}")),
+            },
+            None => (None, "Bookmarks need a verified YouTube account.".into()),
+        };
         Ok(Self {
+            bookmarks,
+            bookmarks_error,
             progress,
             cache: cache_store,
             playback_cookies: cookies.into(),
@@ -235,11 +254,26 @@ impl Session {
         })
     }
 
+    pub fn history_order_revision(&self) -> u64 {
+        self.watch_index.read().unwrap().order_revision
+    }
+    pub fn history_order(&self) -> (Vec<String>, bool, u64) {
+        let index = self.watch_index.read().unwrap();
+        (
+            index.ordered.clone(),
+            index.order_complete,
+            index.order_revision,
+        )
+    }
+
     pub fn refresh_watch_history(&self) {
         self.watch_refresh.notify_one();
     }
 
     pub async fn cached_feed(&self, view: &View) -> Option<crate::feed::FeedPage> {
+        if matches!(view, View::Bookmarks) {
+            return None;
+        }
         let key = serde_json::to_string(view).ok()?;
         let mut page: crate::feed::FeedPage = self.cache.as_ref()?.get("pages-v1", &key).await?;
         // Old response hints must not override a newer history reconciliation.
@@ -253,6 +287,9 @@ impl Session {
     }
 
     pub fn cache_feed(&self, view: &View, page: &crate::feed::FeedPage) {
+        if matches!(view, View::Bookmarks) {
+            return;
+        }
         if let Some(cache) = &self.cache
             && let Ok(key) = serde_json::to_string(view)
         {
@@ -291,6 +328,15 @@ impl Session {
         continuation: Option<&str>,
         visitor: Option<&str>,
     ) -> Result<Page> {
+        if matches!(view, View::Bookmarks) {
+            let bookmarks = self
+                .bookmarks
+                .as_ref()
+                .with_context(|| self.bookmarks_error.clone())?;
+            bookmarks.ensure_loaded().await?;
+            let (order, complete, revision) = self.history_order();
+            return bookmarks.page(&order, complete, revision);
+        }
         let started = Instant::now();
         let mut page = self.page_inner(view, continuation, visitor).await?;
         for video in &mut page.videos {
@@ -437,7 +483,10 @@ async fn sync_history(
     let mut version = 0_u64;
     loop {
         let pass_started = Instant::now();
-        let mut pass = SyncPass::new(&cache, history::now());
+        let require_order = crate::config::Store::new()
+            .and_then(|s| s.load_settings())
+            .is_ok_and(|s| s.bookmarks_enabled);
+        let mut pass = SyncPass::with_order(&cache, history::now(), require_order);
         let resumed = pass.resume_from.take();
         let first_page = resumed.as_ref().map_or(1, |(_, _, pages)| pages + 1);
         {
@@ -499,6 +548,13 @@ async fn sync_history(
                 {
                     let mut state = index.write().unwrap();
                     state.ids = cache.ids.clone();
+                    if state.ordered != cache.ordered
+                        || state.order_complete != cache.order_complete
+                    {
+                        state.order_revision += 1;
+                    }
+                    state.ordered = cache.ordered.clone();
+                    state.order_complete = cache.order_complete;
                     if reached_end {
                         state.hints_since = Some(pass_started);
                     }
@@ -586,7 +642,7 @@ enum ParseMode {
     History,
 }
 
-fn parse_response(response: &str, preserve_duplicates: bool) -> Result<Page> {
+pub(crate) fn parse_response(response: &str, preserve_duplicates: bool) -> Result<Page> {
     parse_page(
         response,
         if preserve_duplicates {
@@ -1629,6 +1685,8 @@ mod tests {
         assert!(client.user_auth_set_cookie_txt(&cookies).await.is_ok());
         let (_, changes) = tokio::sync::watch::channel(0);
         let session = Session {
+            bookmarks: None,
+            bookmarks_error: String::new(),
             progress: None,
             cache: None,
             playback_cookies: cookies.into(),
@@ -1733,6 +1791,8 @@ mod tests {
         // Exercise production requests without changing the user's settings or
         // cache and without launching an unbounded background history crawl.
         let session = Session {
+            bookmarks: None,
+            bookmarks_error: String::new(),
             progress: None,
             cache: None,
             playback_cookies: cookies.into(),

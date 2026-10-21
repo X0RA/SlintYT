@@ -1,3 +1,4 @@
+import { BookmarkButton } from "bookmark-button.slint";
 import { Theme } from "../theme.slint";
 import { AppState, VideoData } from "../state.slint";
 import { Icon } from "icon.slint";
@@ -39,6 +40,7 @@ export component VideoRow inherits Rectangle {
             Rectangle {
                 width: root.thumb-width; height: self.width * 9 / 16; border-radius: 12px; clip: true; background: Theme.raised;
                 Image { source: root.video.thumbnail; width: parent.width; height: parent.height; image-fit: cover; }
+                if AppState.bookmarks-enabled : BookmarkButton { x: 8px; y: 8px; video-id: root.video.id; reveal: touch.has-hover; }
                 if root.video.duration != "" : Rectangle {
                     x: parent.width - self.width - 8px; y: parent.height - self.height - 9px;
                     width: duration.preferred-width + 12px; height: 20px; background: #0a0a0bc7; border-radius: 5px;

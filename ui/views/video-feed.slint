@@ -1,3 +1,4 @@
+import { Choice } from "../components/choice.slint";
 import { ListView, Spinner } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
 import { AppState } from "../state.slint";
@@ -34,6 +35,19 @@ export component VideoFeed inherits Rectangle {
     background: Theme.background;
     VerticalLayout {
         spacing: 20px; padding-top: root.list-first ? 0px : root.top-inset;
+        if AppState.view-kind == 9 : VerticalLayout { spacing: 10px;
+            HorizontalLayout { spacing: 12px; cross-axis-alignment: center;
+                Text { text: "Bookmarks"; color: Theme.strong; font-size: 26px; font-weight: 700; horizontal-stretch: 1; }
+                ActionButton { icon: "refresh"; tip: "Refresh bookmarks"; outlined: true; enabled: !AppState.bookmarks-busy; clicked => { AppState.refresh-bookmarks(); } }
+            }
+            Text { text: AppState.videos.length + (AppState.videos.length == 1 ? " video" : " videos") + (AppState.bookmark-destination-label != "" ? " · " + AppState.bookmark-destination-label : ""); color: Theme.subtle; font-size: 13px; overflow: elide; }
+            HorizontalLayout { alignment: start;
+                Choice { options: ["Most recently added", "Most recently played"]; label: "Sort bookmarks"; current-index: AppState.bookmark-sort; selected(index) => { AppState.set-bookmark-sort(index); } }
+            }
+            if AppState.bookmarks-note != "" : Text { text: AppState.bookmarks-note; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
+            if AppState.bookmarks-error != "" : Text { text: AppState.bookmarks-error; color: #ffaaa5; font-size: 13px; wrap: word-wrap; }
+            if AppState.bookmark-destination-id == "" : ActionButton { text: "Choose destination in Settings"; clicked => { AppState.settings-open = true; } }
+        }
         if AppState.view-kind == 2 : Text { text: AppState.page-title; color: Theme.muted; font-size: 14px; }
         if AppState.view-kind == 8 && AppState.channel-name != "" : ChannelHeader {}
         if AppState.view-kind == 5 : HorizontalLayout { alignment: end;
@@ -81,7 +95,7 @@ export component VideoFeed inherits Rectangle {
             }
         }
         if AppState.videos.length == 0 && !AppState.busy && AppState.error == "" : Rectangle {
-            Text { text: AppState.view-kind == 4 ? "This playlist is empty." : AppState.view-kind == 6 ? "No subscriptions yet." : "Nothing to show yet."; color: Theme.muted; font-size: 17px; horizontal-alignment: center; vertical-alignment: center; }
+            Text { text: AppState.view-kind == 9 ? "No bookmarks yet. Bookmark a video to find it here." : AppState.view-kind == 4 ? "This playlist is empty." : AppState.view-kind == 6 ? "No subscriptions yet." : "Nothing to show yet."; color: Theme.muted; font-size: 17px; horizontal-alignment: center; vertical-alignment: center; }
         }
         if AppState.view-kind == 6 && AppState.channel-filter != "" && AppState.channel-count(AppState.videos,AppState.channel-filter,false) == 0 : Text { text: "No channels match."; color: Theme.subtle; horizontal-alignment: center; }
         if root.rows && AppState.videos.length > 0 : Rectangle {

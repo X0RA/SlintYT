@@ -1,6 +1,7 @@
 slint::include_modules!();
 
 mod app;
+mod bookmarks;
 mod browser;
 mod cache;
 mod config;

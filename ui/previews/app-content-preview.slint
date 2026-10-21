@@ -8,6 +8,11 @@ export component AppWindow inherits Window {
     preferred-width: 1280px; preferred-height: 820px;
     min-width: 480px; min-height: 540px;
     init => {
+        AppState.bookmarks-enabled = true;
+        AppState.connected = true;
+        AppState.bookmark-destination-label = "slintyt-bookmarks · PRIVATE";
+        AppState.bookmark-destination-id = "mock-playlist";
+        AppState.bookmark-choices = [{title:"A long private playlist name to test wrapping · PRIVATE",url:"mock-playlist"},{title:"Public examples · PUBLIC",url:"public"}];
         Palette.color-scheme = ColorScheme.dark;
         AppState.player-rich-description = @markdown("A mock description with a [website](https://example.com), a timestamp and multiple lines.\n\nThis preview works without backend callbacks.");
         AppState.initializing = false;
@@ -64,6 +69,7 @@ export component AppWindow inherits Window {
             Button { min-width: 0px; text: "Settings"; clicked => { AppState.settings-open = !AppState.settings-open; AppState.player-open = false; } }
             Button { min-width: 0px; text: "Channels"; clicked => { AppState.view-kind = 6; AppState.settings-open = false; AppState.videos = [{id: "UC_mock",title: "Linus Tech Tips",initials: "LT",tone: #4a3a3a,subscribed: true,metadata: "16.2M subscribers · Uploaded 2 hours ago"}, {id:"UC_other",title:"A channel with a very long name that should elide gracefully",initials:"AC",tone:#3b4a63,subscribed:true,metadata:"248K subscribers · Uploaded yesterday"}]; } }
             Button { min-width: 0px; text: "Channel"; clicked => { AppState.view-kind = 8; AppState.settings-open = false; AppState.channel-name = "Linus Tech Tips"; AppState.channel-initials = "LT"; AppState.channel-meta = "@LinusTechTips · 16.2M subscribers · 7.4K videos"; AppState.channel-description = "We make entertaining videos about technology, including tech reviews, showcases and everything in between. This is deliberately long mock text to validate the expanded description."; AppState.channel-subscribed = true; AppState.channel-banner = @image-url("mock-thumbnail.svg"); AppState.videos = [{id:"abcdefghijk",title:"A technology video",channel:"Linus Tech Tips",initials:"LT",tone:#4a3a3a,metadata:"1.2M views · 2 days ago",duration:"16:24",thumbnail:@image-url("mock-thumbnail.svg")}]; AppState.sections = [{start:0,count:1}]; } }
+            Button { min-width: 0px; text: "Bookmarks"; clicked => { AppState.view-kind = 9; AppState.page-title = "Bookmarks"; } }
             Button { min-width: 0px; text: "Startup"; clicked => { AppState.initializing = !AppState.initializing; } }
             Button { min-width: 0px; text: "Refreshing page"; clicked => { AppState.refreshing = !AppState.refreshing; AppState.busy = false; } }
             Button { min-width: 0px; text: "Preview empty"; clicked => { AppState.videos = []; } }

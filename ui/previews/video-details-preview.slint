@@ -5,6 +5,8 @@ export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcru
 export component AppWindow inherits Window {
     title: "video-details preview"; preferred-width: 1100px; height: 760px; min-width: 480px; background: #0e0e10;
     init => {
+        AppState.bookmarks-enabled = true;
+        AppState.connected = true;
         Palette.color-scheme = ColorScheme.dark;
         AppState.player-rich-description = @markdown("A mock description with a [website](https://example.com), a timestamp and multiple lines.\n\nThis preview works without backend callbacks.");
         AppState.initializing = false; AppState.player-detail-tab = 1;

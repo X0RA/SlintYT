@@ -28,6 +28,7 @@ export component NavRail inherits Rectangle {
         subscriptions-nav := RailItem { icon: "subscriptions"; label: "Subscriptions"; active: root.active == 5 || root.active == 6; clicked => { root.navigate(5); } }
         history-nav := RailItem { icon: "history"; label: "History"; active: root.active == 1; clicked => { root.navigate(1); } }
         playlists-nav := RailItem { icon: "playlist"; label: "Playlists"; active: root.active == 3 || root.active == 4; clicked => { root.navigate(3); } }
+        if AppState.bookmarks-enabled : bookmarks-nav := RailItem { icon: "bookmark"; label: "Bookmarks"; active: root.active == 9; clicked => { root.navigate(9); } }
         Rectangle { vertical-stretch: 1; background: transparent; }
         settings-nav := RailItem { icon: "settings"; label: "Settings"; active: root.active == 7; height: 48px; clicked => { root.navigate(7); } }
         refresh := Rectangle {
@@ -55,12 +56,13 @@ export component NavRail inherits Rectangle {
     }
     if root.horizontal : HorizontalLayout {
         alignment: space-around; spacing: 0px;
-        RailItem { width: root.width / 7; icon: "home"; label: "Home"; active: root.active == 0; clicked => { root.navigate(0); } }
-        RailItem { width: root.width / 7; icon: "subscriptions"; label: "Subscriptions"; active: root.active == 5 || root.active == 6; clicked => { root.navigate(5); } }
-        RailItem { width: root.width / 7; icon: "history"; label: "History"; active: root.active == 1; clicked => { root.navigate(1); } }
-        RailItem { width: root.width / 7; icon: "playlist"; label: "Playlists"; active: root.active == 3 || root.active == 4; clicked => { root.navigate(3); } }
-        RailItem { width: root.width / 7; icon: "settings"; label: "Settings"; active: root.active == 7; clicked => { root.navigate(7); } }
-        RailItem { width: root.width / 7; icon: "refresh"; label: "Sync"; clicked => { root.toggle-sync(); } }
-        RailItem { width: root.width / 7; icon: "more"; label: "Account"; clicked => { root.toggle-account(); } }
+        RailItem { width: root.width / (AppState.bookmarks-enabled ? 8 : 7); icon: "home"; label: "Home"; active: root.active == 0; clicked => { root.navigate(0); } }
+        RailItem { width: root.width / (AppState.bookmarks-enabled ? 8 : 7); icon: "subscriptions"; label: "Subscriptions"; active: root.active == 5 || root.active == 6; clicked => { root.navigate(5); } }
+        RailItem { width: root.width / (AppState.bookmarks-enabled ? 8 : 7); icon: "history"; label: "History"; active: root.active == 1; clicked => { root.navigate(1); } }
+        RailItem { width: root.width / (AppState.bookmarks-enabled ? 8 : 7); icon: "playlist"; label: "Playlists"; active: root.active == 3 || root.active == 4; clicked => { root.navigate(3); } }
+        if AppState.bookmarks-enabled : RailItem { width: root.width / 8; icon: "bookmark"; label: "Bookmarks"; active: root.active == 9; clicked => { root.navigate(9); } }
+        RailItem { width: root.width / (AppState.bookmarks-enabled ? 8 : 7); icon: "settings"; label: "Settings"; active: root.active == 7; clicked => { root.navigate(7); } }
+        RailItem { width: root.width / (AppState.bookmarks-enabled ? 8 : 7); icon: "refresh"; label: "Sync"; clicked => { root.toggle-sync(); } }
+        RailItem { width: root.width / (AppState.bookmarks-enabled ? 8 : 7); icon: "more"; label: "Account"; clicked => { root.toggle-account(); } }
     }
 }

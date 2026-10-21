@@ -12,6 +12,25 @@ export struct Breadcrumb { id: string, title: string, position: float, playlist-
 export struct LinkData { title: string, url: string }
 
 export global AppState {
+    in-out property <bool> bookmarks-enabled: false;
+    in-out property <bool> bookmarks-busy: false;
+    in-out property <string> bookmarks-error;
+    in-out property <string> bookmarks-note;
+    in-out property <int> bookmark-mode: 0;
+    in-out property <int> bookmark-sort: 0;
+    in-out property <int> bookmark-epoch: 0;
+    in-out property <string> bookmark-destination-label;
+    in-out property <string> bookmark-destination-id;
+    in-out property <[LinkData]> bookmark-choices;
+    pure callback bookmark-state(string, int) -> int;
+    callback set-bookmarks-enabled(bool);
+    callback set-bookmark-destination(int, string);
+    callback set-bookmark-sort(int);
+    callback load-bookmark-choices();
+    callback refresh-bookmarks();
+    callback open-bookmarks();
+    callback toggle-bookmark(string);
+
     in-out property <bool> initializing: true;
     in-out property <bool> setup-open: true;
     in-out property <bool> connected: false;

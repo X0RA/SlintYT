@@ -1,0 +1,92 @@
+import { ScrollView, Spinner } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { AppState, LinkData } from "../state.slint";
+import { ActionButton } from "action-button.slint";
+import { MenuItem, MenuSurface } from "menu-item.slint";
+component BookmarkSwitch inherits Rectangle {
+    in property <bool> checked;
+    callback toggled(bool);
+    width: 52px; height: 32px;
+    accessible-role: checkbox; accessible-label: "Enable bookmarks"; accessible-checked: root.checked;
+    accessible-action-default => { root.toggled(!root.checked); }
+    forward-focus: focus;
+    Rectangle { x: 6px; y: 4px; width: 40px; height: 24px; border-radius: 12px;
+        background: root.checked ? Theme.accent : #2e2e35;
+        border-width: focus.has-focus ? 1px : 0px; border-color: Theme.text;
+        Rectangle { x: root.checked ? 19px : 3px; y: 3px; width: 18px; height: 18px; border-radius: 9px; background: white; animate x { duration: 150ms; } }
+    }
+    TouchArea { mouse-cursor: pointer; clicked => { focus.focus(); root.toggled(!root.checked); } }
+    focus := FocusScope { focus-on-click: false; key-pressed(event) => { if event.text == " " || event.text == "\n" { root.toggled(!root.checked); return accept; } return reject; } }
+}
+component DestinationRadio inherits Rectangle {
+    in property <string> label;
+    in property <bool> checked;
+    callback selected();
+    height: 40px;
+    accessible-role: radio-button; accessible-label: root.label; accessible-checked: root.checked;
+    accessible-action-default => { root.selected(); }
+    forward-focus: focus;
+    HorizontalLayout { spacing: 10px; alignment: start; cross-axis-alignment: center;
+        Rectangle { width: 18px; height: 18px; border-radius: 9px; border-width: 1px; border-color: root.checked || focus.has-focus ? Theme.accent : Theme.muted;
+            if root.checked : Rectangle { x: 4px; y: 4px; width: 10px; height: 10px; border-radius: 5px; background: Theme.accent; }
+        }
+        Text { text: root.label; color: Theme.text; font-size: 14px; }
+    }
+    TouchArea { mouse-cursor: pointer; clicked => { focus.focus(); root.selected(); } }
+    focus := FocusScope { focus-on-click: false; key-pressed(event) => { if event.text == " " || event.text == "\n" { root.selected(); return accept; } return reject; } }
+}
+export component BookmarksSettings inherits Rectangle {
+    in property <bool> enabled: AppState.bookmarks-enabled;
+    in property <bool> busy: AppState.bookmarks-busy;
+    in property <string> error: AppState.bookmarks-error;
+    in property <int> mode: AppState.bookmark-mode;
+    in property <bool> connected: AppState.connected;
+    in property <string> destination-label: AppState.bookmark-destination-label;
+    in property <string> destination-id: AppState.bookmark-destination-id;
+    in property <[LinkData]> choices: AppState.bookmark-choices;
+    callback enable-changed(bool);
+    enable-changed(enabled) => { AppState.set-bookmarks-enabled(enabled); }
+    callback destination-changed(int, string);
+    destination-changed(mode, id) => { AppState.set-bookmark-destination(mode, id); }
+    callback load-choices();
+    load-choices() => { AppState.load-bookmark-choices(); }
+    callback retry();
+    retry() => { AppState.refresh-bookmarks(); }
+
+    min-height: layout.preferred-height;
+    background: Theme.surface; border-radius: 14px; border-width: 1px; border-color: Theme.border;
+    layout := VerticalLayout { padding: 18px; spacing: 10px;
+        HorizontalLayout { cross-axis-alignment: center;
+            Text { text: "Enable bookmarks"; color: Theme.text; font-size: 14px; font-weight: 500; horizontal-stretch: 1; }
+            enable-bookmarks := BookmarkSwitch { checked: root.enabled; toggled(value) => { root.enable-changed(value); } }
+        }
+        Text { text: "Show Bookmarks in navigation and quick bookmark buttons on videos."; color: Theme.subtle; font-size: 13px; wrap: word-wrap; }
+        automatic := DestinationRadio { label: "Use slintyt-bookmarks"; checked: root.mode == 0; selected => { root.destination-changed(0, ""); } }
+        Text { text: "Find the existing playlist or create a private one when enabled."; color: Theme.subtle; font-size: 13px; wrap: word-wrap; }
+        selected := DestinationRadio { label: "Choose playlist"; checked: root.mode == 1; selected => { root.destination-changed(1, ""); } }
+        if root.mode == 1 : HorizontalLayout { spacing: 8px; alignment: start;
+            ActionButton { text: "Choose playlist"; outlined: true; enabled: root.connected; clicked => { root.load-choices(); picker.show(); } }
+            ActionButton { icon: "refresh"; tip: "Reload playlists"; quiet: true; enabled: root.connected && !root.busy; clicked => { root.load-choices(); } }
+        }
+        if root.destination-label != "" : Text { text: root.destination-label; color: Theme.text; font-size: 13px; wrap: word-wrap; }
+        if !root.connected : Text { text: "Connect a browser account to select a playlist."; color: Theme.subtle; font-size: 13px; wrap: word-wrap; }
+        if root.busy : HorizontalLayout { alignment: start; spacing: 10px; Spinner { width: 16px; height: 16px; } Text { text: "Loading playlists and bookmarks…"; color: Theme.subtle; font-size: 13px; } }
+        if root.error != "" : VerticalLayout { spacing: 8px;
+            Text { text: root.error; color: #ffaaa5; font-size: 13px; wrap: word-wrap; }
+            HorizontalLayout { alignment: start; ActionButton { text: "Retry"; enabled: !root.busy; clicked => { root.retry(); } } }
+        }
+        Text { text: "The chosen playlist is set to newest-added order on YouTube. Existing playlist visibility is preserved. Removing a bookmark removes every copy of that video from this playlist. Turning bookmarks off keeps your playlist."; color: Theme.subtle; font-size: 12px; wrap: word-wrap; }
+    }
+    picker := PopupWindow {
+        x: 12px; y: 100px; width: min(440px, root.width - 24px); height: 320px;
+        MenuSurface {
+            ScrollView { horizontal-scrollbar-policy: always-off;
+                VerticalLayout { padding: 6px; spacing: 0px; alignment: start;
+                    if root.busy : Text { text: "Loading editable playlists…"; color: Theme.muted; height: 40px; }
+                    if !root.busy && root.choices.length == 0 : Text { text: "No editable playlists found."; color: Theme.muted; height: 40px; }
+                    for item in root.choices : MenuItem { text: item.title; checked: item.url == root.destination-id; clicked => { root.destination-changed(1, item.url); picker.close(); } }
+                }
+            }
+        }
+    }
+}

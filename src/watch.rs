@@ -17,6 +17,9 @@ pub enum Phase {
 
 #[derive(Default)]
 pub struct WatchIndex {
+    pub order_revision: u64,
+    pub ordered: Vec<String>,
+    pub order_complete: bool,
     pub ids: HashSet<String>,
     pub hints_since: Option<Instant>,
     pub complete: bool,
@@ -39,6 +42,8 @@ pub struct SyncStatus {
 
 impl WatchIndex {
     pub fn begin(&mut self, cache: &HistoryCache, full: bool, now: u64) {
+        self.ordered = cache.ordered.clone();
+        self.order_complete = cache.order_complete;
         self.ids = if cache.trusted(now) {
             cache.ids.clone()
         } else {

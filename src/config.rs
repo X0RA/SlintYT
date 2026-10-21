@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::browser::Selection;
 
+static SETTINGS_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AccountProfile {
     pub name: String,
@@ -26,6 +28,8 @@ pub struct SavedProfile {
 
 #[derive(Default, Serialize, Deserialize)]
 pub struct Settings {
+    #[serde(default)]
+    pub bookmarks_enabled: bool,
     /// `browser` was the sole field before saved profiles were introduced.
     #[serde(default, alias = "browser")]
     pub current_profile: Option<Selection>,
@@ -89,6 +93,7 @@ impl Store {
     }
 
     pub fn save(&self, browser: &Selection) -> Result<()> {
+        let _guard = SETTINGS_WRITE.lock().unwrap();
         let mut settings = self.load_settings()?;
         settings.remember(browser);
         self.write(&settings)
@@ -96,6 +101,7 @@ impl Store {
 
     /// Updating display metadata must never change the active browser selection.
     pub fn save_account(&self, selection: &Selection, account: AccountProfile) -> Result<()> {
+        let _guard = SETTINGS_WRITE.lock().unwrap();
         let mut settings = self.load_settings()?;
         if let Some(profile) = settings
             .profiles
@@ -106,6 +112,13 @@ impl Store {
             self.write(&settings)?;
         }
         Ok(())
+    }
+
+    pub fn save_bookmarks_enabled(&self, enabled: bool) -> Result<()> {
+        let _guard = SETTINGS_WRITE.lock().unwrap();
+        let mut settings = self.load_settings()?;
+        settings.bookmarks_enabled = enabled;
+        self.write(&settings)
     }
 
     fn write(&self, settings: &Settings) -> Result<()> {

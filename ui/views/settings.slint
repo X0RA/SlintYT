@@ -1,3 +1,4 @@
+import { BookmarksSettings } from "../components/bookmarks-settings.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
 import { ActionButton } from "../components/action-button.slint";
@@ -73,9 +74,9 @@ export component SettingsPage inherits Rectangle {
     // Near the end the page cannot scroll a short section to the top, so keep the clicked one highlighted there.
     private property <int> picked: -1;
     private property <bool> at-end: sections.content-y <= -(sections.content-height - sections.visible-height) + 1px;
-    private property <int> section: root.at-end && root.picked >= 0 ? root.picked : root.scrolled >= about.y ? (AppState.managed-tools ? 8 : 7) : AppState.managed-tools && root.scrolled >= tools.y ? 7 : root.scrolled >= storage.y ? 6 : root.scrolled >= account.y ? 5 : root.scrolled >= feed.y ? 4 : root.scrolled >= watch.y ? 3 : root.scrolled >= interface.y ? 2 : root.scrolled >= engine.y ? 1 : 0;
+    private property <int> section: root.at-end && root.picked >= 0 ? root.picked : root.scrolled >= about.y ? (AppState.managed-tools ? 9 : 8) : AppState.managed-tools && root.scrolled >= tools.y ? 8 : root.scrolled >= storage.y ? 7 : root.scrolled >= account.y ? 6 : root.scrolled >= bookmarks.y ? 5 : root.scrolled >= feed.y ? 4 : root.scrolled >= watch.y ? 3 : root.scrolled >= interface.y ? 2 : root.scrolled >= engine.y ? 1 : 0;
     function jump(index: int) {
-        let target = index == 0 ? playback.y : index == 1 ? engine.y : index == 2 ? interface.y : index == 3 ? watch.y : index == 4 ? feed.y : index == 5 ? account.y : index == 6 ? storage.y : index == 7 && AppState.managed-tools ? tools.y : about.y;
+        let target = index == 0 ? playback.y : index == 1 ? engine.y : index == 2 ? interface.y : index == 3 ? watch.y : index == 4 ? feed.y : index == 5 ? bookmarks.y : index == 6 ? account.y : index == 7 ? storage.y : index == 8 && AppState.managed-tools ? tools.y : about.y;
         root.picked = index;
         sections.content-y = -min(target, max(0px, sections.content-height - sections.visible-height));
     }
@@ -85,7 +86,7 @@ export component SettingsPage inherits Rectangle {
         HorizontalLayout {
         spacing: root.narrow ? 16px : 48px;
         VerticalLayout { width: root.narrow ? 120px : 180px; alignment: start; spacing: 2px;
-            for name[index] in AppState.managed-tools ? ["Playback", "Video engine", "Interface", "Watch status", "Feed", "Account", "Storage", "yt-dlp", "About"] : ["Playback", "Video engine", "Interface", "Watch status", "Feed", "Account", "Storage", "About"] : SectionLink {
+            for name[index] in AppState.managed-tools ? ["Playback", "Video engine", "Interface", "Watch status", "Feed", "Bookmarks", "Account", "Storage", "yt-dlp", "About"] : ["Playback", "Video engine", "Interface", "Watch status", "Feed", "Bookmarks", "Account", "Storage", "About"] : SectionLink {
                 text: name; active: root.section == index; clicked => { root.jump(index); }
             }
         }
@@ -122,6 +123,10 @@ export component SettingsPage inherits Rectangle {
                 feed := SettingSection { title: "Feed"; help: "What shows up in Home and Subscriptions.";
                     SettingRow { first: true; label: "Hide Shorts"; help: "Skip vertical short-form videos."; kind: 1; options: []; action: ""; checked: true; }
                     SettingRow { label: "Hide live streams and premieres"; help: "Only show videos that are ready to watch."; kind: 1; options: []; action: ""; checked: false; }
+                }
+                bookmarks := VerticalLayout { spacing: 14px;
+                    Text { text: "Bookmarks"; color: Theme.text; font-size: 15px; font-weight: 600; }
+                    BookmarksSettings {}
                 }
                 account := SettingSection { title: "Account"; help: "Your YouTube session is borrowed from a browser profile.";
                     SettingRow { first: true; label: "Browser profile"; help: AppState.account-label == "" ? "Not connected" : AppState.account-label; kind: 3; options: ["Change browser"]; action: "Change browser"; checked: false; activated => { AppState.settings-open = false; AppState.setup-open = true; AppState.error = ""; AppState.scan-profiles(); } }

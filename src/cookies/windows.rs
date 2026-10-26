@@ -4,11 +4,47 @@ use base64::Engine;
 use std::path::Path;
 use windows_sys::Win32::{
     Foundation::LocalFree,
-    Security::Cryptography::{CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptUnprotectData},
+    Security::Cryptography::{
+        CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,
+    },
 };
 use zeroize::{Zeroize, Zeroizing};
 
-fn unprotect(data: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
+/// Seals data to the current OS user, used for pasted-cookie keys.
+pub(super) fn protect(data: &[u8]) -> Result<Vec<u8>> {
+    const ERROR: &str = "Could not protect the pasted cookies with Windows data protection.";
+    let size = u32::try_from(data.len()).context(ERROR)?;
+    let input = CRYPT_INTEGER_BLOB {
+        cbData: size,
+        pbData: data.as_ptr().cast_mut(),
+    };
+    let mut output = CRYPT_INTEGER_BLOB {
+        cbData: 0,
+        pbData: std::ptr::null_mut(),
+    };
+    let success = unsafe {
+        CryptProtectData(
+            &input,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            CRYPTPROTECT_UI_FORBIDDEN,
+            &mut output,
+        )
+    };
+    if success == 0 || output.pbData.is_null() {
+        bail!(ERROR);
+    }
+    let result = unsafe {
+        let bytes = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
+        LocalFree(output.pbData.cast());
+        bytes
+    };
+    Ok(result)
+}
+
+pub(super) fn unprotect(data: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
     let size = u32::try_from(data.len()).context(DECRYPT_ERROR)?;
     let input = CRYPT_INTEGER_BLOB {
         cbData: size,

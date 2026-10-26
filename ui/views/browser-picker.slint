@@ -1,9 +1,10 @@
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
-import { AppState } from "../state.slint";
+import { AppState, BrowserProfile } from "../state.slint";
 import { ActionButton } from "../components/action-button.slint";
 import { Choice } from "../components/choice.slint";
 import { Icon } from "../components/icon.slint";
+import { PillInput } from "../components/pill-input.slint";
 
 // A selectable profile: radio, folder name and full path.
 component ProfileRow inherits Rectangle {
@@ -93,6 +94,93 @@ component Notice inherits Rectangle {
     }
 }
 
+// Collapsible numbered steps, used for the cookie export instructions.
+component Guide inherits VerticalLayout {
+    in property <string> title;
+    in property <[string]> steps;
+    in-out property <bool> open: false;
+    header := Rectangle {
+        height: 38px; border-radius: 8px;
+        background: guide-touch.has-hover ? Theme.raised : transparent;
+        border-width: guide-focus.has-focus ? 1px : 0px; border-color: #7aa2ff;
+        accessible-role: button; accessible-label: root.title;
+        accessible-expandable: true; accessible-expanded: root.open;
+        accessible-action-default => { root.open = !root.open; }
+        HorizontalLayout {
+            padding-left: 8px; padding-right: 8px; spacing: 10px;
+            VerticalLayout {
+                alignment: center;
+                Icon { name: "chevron"; width: 14px; height: 14px; tint: Theme.muted; transform-rotation: root.open ? 90deg : 0deg; }
+            }
+            Text { horizontal-stretch: 1; text: root.title; font-size: 13.5px; font-weight: 500; color: Theme.text; vertical-alignment: center; }
+        }
+        guide-touch := TouchArea { mouse-cursor: pointer; clicked => { guide-focus.focus(); root.open = !root.open; } }
+        guide-focus := FocusScope {
+            key-pressed(event) => {
+                if event.text == " " || event.text == "\n" { root.open = !root.open; return accept; }
+                return reject;
+            }
+        }
+    }
+    if root.open : VerticalLayout {
+        padding-left: 32px; padding-right: 8px; padding-top: 2px; padding-bottom: 10px; spacing: 7px;
+        for step[index] in root.steps : HorizontalLayout {
+            spacing: 8px;
+            Text { width: 18px; text: (index + 1) + "."; font-size: 13px; color: Theme.subtle; }
+            Text {
+                horizontal-stretch: 1; text: step; font-size: 13px; color: Theme.muted; wrap: word-wrap;
+                accessible-role: text; accessible-label: self.text;
+            }
+        }
+    }
+}
+
+// A saved pasted-cookie profile with replace and two-step remove actions.
+component PastedRow inherits HorizontalLayout {
+    in property <BrowserProfile> profile;
+    in property <bool> checked;
+    in property <bool> enabled: true;
+    in property <bool> narrow;
+    callback picked();
+    callback replace();
+    callback remove();
+    private property <bool> confirming: false;
+    spacing: 8px;
+    ProfileRow {
+        horizontal-stretch: 1;
+        name: root.confirming ? "Remove " + root.profile.name + "?" : root.profile.name;
+        path: root.confirming ? "Its saved cookies are deleted from this computer." : root.profile.label;
+        checked: root.checked; enabled: root.enabled && !root.confirming;
+        picked => { root.picked(); }
+    }
+    if !root.confirming : VerticalLayout {
+        alignment: center;
+        HorizontalLayout {
+            spacing: 6px;
+            ActionButton {
+                text: "Replace cookies"; icon: root.narrow ? "refresh" : ""; quiet: true; height: 34px;
+                enabled: root.enabled;
+                clicked => { root.replace(); }
+            }
+            ActionButton {
+                text: "Remove"; quiet: true; height: 34px; enabled: root.enabled;
+                clicked => { root.confirming = true; }
+            }
+        }
+    }
+    if root.confirming : VerticalLayout {
+        alignment: center;
+        HorizontalLayout {
+            spacing: 6px;
+            ActionButton { text: "Cancel"; quiet: true; height: 34px; clicked => { root.confirming = false; } }
+            ActionButton {
+                text: "Remove"; outlined: true; height: 34px; enabled: root.enabled;
+                clicked => { root.confirming = false; root.remove(); }
+            }
+        }
+    }
+}
+
 component CookieNotice inherits HorizontalLayout {
     spacing: 8px; cross-axis-alignment: center;
     Path {
@@ -101,7 +189,7 @@ component CookieNotice inherits HorizontalLayout {
         commands: "M7 11h10a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2zM8 11V8a4 4 0 0 1 8 0v3";
     }
     Text {
-        horizontal-stretch: 1; text: "Cookies are never saved to your settings file.";
+        horizontal-stretch: 1; text: "Cookies are never saved to your settings file. Pasted cookies are encrypted with your system keychain.";
         font-size: 12.5px; color: Theme.subtle; overflow: elide;
         accessible-role: text; accessible-label: self.text;
     }
@@ -118,6 +206,12 @@ export component BrowserPicker inherits Rectangle {
     browse => { AppState.browse-profile-folder(); }
     use-profile(index, keyring) => { AppState.connect-profile(index, keyring); }
     use-folder(path, keyring) => { AppState.connect-manual("", path, keyring); }
+    callback use-pasted(string, string, string);
+    callback use-saved(string);
+    callback remove-saved(int);
+    use-pasted(text, name, replace) => { AppState.connect-pasted(text, name, replace); }
+    use-saved(path) => { AppState.connect-saved-path(path); }
+    remove-saved(index) => { AppState.remove-profile(index); }
     private property <int> selected <=> AppState.selected-profile;
     changed selected => {
         if root.selected >= 0 && root.selected < AppState.profiles.length && AppState.profiles[root.selected].temporary {
@@ -129,20 +223,46 @@ export component BrowserPicker inherits Rectangle {
     }
     private property <bool> manual: false;
     private property <string> manual-path <=> AppState.manual-profile-path;
-    changed manual-path => { if root.manual-path != "" { root.selected = -1; root.manual = true; } }
+    changed manual-path => { if root.manual-path != "" { root.selected = -1; root.saved-pick = ""; root.paste = false; root.manual = true; } }
+    // The paste card is the "custom" choice: opening it selects it.
+    private property <bool> paste <=> AppState.paste-open;
+    changed paste => { if root.paste { root.selected = -1; root.saved-pick = ""; root.manual-path = ""; } }
+    // Vault path and name of a picked saved pasted profile. Paths, not list
+    // indices, so removing another profile can't shift the pick.
+    private property <string> saved-pick;
+    private property <string> saved-pick-name;
+    private property <bool> replacing: AppState.replace-target != "";
+    private property <string> paste-title: root.replacing ? "Replace cookies for " + AppState.replace-name : "Paste cookies (Custom)";
     private property <int> keyring-index: 0;
     private property <bool> show-temporary: false;
     private property <bool> narrow: root.width < 640px;
     private property <length> side: root.narrow ? 16px : 32px;
-    private property <string> choice: root.manual-path != "" ? "this folder"
+    private property <string> choice: root.paste ? (AppState.paste-text == "" ? "" : "pasted cookies")
+        : root.saved-pick != "" ? root.saved-pick-name
+        : root.manual-path != "" ? "this folder"
         : root.selected >= 0 && root.selected < AppState.profiles.length ? AppState.profiles[root.selected].name : "";
     function pick(index: int) {
         root.selected = index;
+        root.saved-pick = "";
+        root.paste = false;
         root.manual-path = "";
+    }
+    function pick-saved(profile: BrowserProfile) {
+        root.selected = -1;
+        root.paste = false;
+        root.manual-path = "";
+        root.saved-pick = profile.path;
+        root.saved-pick-name = profile.name;
     }
     function connect() {
         if AppState.busy || AppState.profile-dialog-open { return; }
-        if root.manual-path != "" {
+        if root.paste {
+            if AppState.paste-text != "" {
+                root.use-pasted(AppState.paste-text, AppState.paste-name, AppState.replace-target);
+            }
+        } else if root.saved-pick != "" {
+            root.use-saved(root.saved-pick);
+        } else if root.manual-path != "" {
             root.use-folder(root.manual-path, root.keyring-index);
         } else if root.choice != "" {
             root.use-profile(root.selected, root.keyring-index);
@@ -192,6 +312,39 @@ export component BrowserPicker inherits Rectangle {
                         }
                     }
                     Rectangle { height: 36px; }
+                    if AppState.pasted-profile-count > 0 : VerticalLayout {
+                        padding-bottom: 28px;
+                        VerticalLayout {
+                            padding-bottom: 10px;
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Rectangle {
+                                    width: 28px; height: 28px; border-radius: 9px; background: #2a2f3d;
+                                    Text { text: "P"; font-size: 11px; font-weight: 700; color: Theme.strong; }
+                                }
+                                Text { text: "Pasted cookies"; font-size: 14px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
+                                Text { horizontal-stretch: 1; text: "Saved in SlintYT, encrypted"; font-size: 12.5px; color: #71717a; vertical-alignment: center; overflow: elide; }
+                            }
+                        }
+                        Rectangle { height: 1px; background: Theme.row; }
+                        for profile[index] in AppState.saved-profiles : VerticalLayout {
+                            if profile.pasted : VerticalLayout {
+                                PastedRow {
+                                    profile: profile; narrow: root.narrow;
+                                    checked: root.saved-pick == profile.path;
+                                    enabled: !AppState.busy && !AppState.profile-dialog-open;
+                                    picked => { root.pick-saved(profile); }
+                                    replace => { AppState.replace-target = profile.path; AppState.replace-name = profile.name; AppState.paste-error = ""; root.paste = true; }
+                                    remove => {
+                                        if root.saved-pick == profile.path { root.saved-pick = ""; }
+                                        if AppState.replace-target == profile.path { AppState.replace-target = ""; AppState.replace-name = ""; }
+                                        root.remove-saved(index);
+                                    }
+                                }
+                                Rectangle { height: 1px; background: Theme.row; }
+                            }
+                        }
+                    }
                     if AppState.profiles.length == 0 : Text {
                         text: AppState.busy ? "Looking for browser profiles…" : "No browser profiles found. Scan again, or use a profile folder directly below.";
                         font-size: 14px; color: Theme.subtle; wrap: word-wrap;
@@ -263,6 +416,128 @@ export component BrowserPicker inherits Rectangle {
                         Notice { message: AppState.error; tint: #f87171; }
                     }
                     Rectangle { height: 28px; }
+                    paste-card := Rectangle {
+                        border-radius: 14px; background: Theme.surface; border-width: 1px;
+                        border-color: root.paste ? #3a3a42 : #1e1e23;
+                        VerticalLayout {
+                            paste-toggle := Rectangle {
+                                border-radius: 14px;
+                                border-width: paste-focus.has-focus ? 1px : 0px; border-color: #7aa2ff;
+                                accessible-role: button;
+                                accessible-label: root.paste-title;
+                                accessible-checkable: true;
+                                accessible-checked: root.paste;
+                                accessible-expandable: true;
+                                accessible-expanded: root.paste;
+                                accessible-action-default => { root.paste = !root.paste; }
+                                HorizontalLayout {
+                                    padding-left: 18px; padding-right: 18px; padding-top: 14px; padding-bottom: 14px; spacing: 16px;
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Rectangle {
+                                            width: 20px; height: 20px; border-radius: 10px; border-width: 2px;
+                                            border-color: root.paste ? Theme.accent : #3f3f46;
+                                            if root.paste : Rectangle { width: 10px; height: 10px; border-radius: 5px; background: Theme.accent; }
+                                        }
+                                    }
+                                    VerticalLayout {
+                                        horizontal-stretch: 1; spacing: 3px;
+                                        Text { text: root.paste-title; font-size: 14px; font-weight: 500; color: Theme.text; overflow: elide; }
+                                        Text { text: "Use cookies exported from any browser. They're encrypted with your system keychain."; font-size: 13px; color: Theme.subtle; wrap: word-wrap; }
+                                    }
+                                    VerticalLayout {
+                                        alignment: center;
+                                        Icon { name: "down"; width: 16px; height: 16px; tint: Theme.subtle; transform-rotation: root.paste ? 180deg : 0deg; }
+                                    }
+                                }
+                                TouchArea { mouse-cursor: pointer; clicked => { paste-focus.focus(); root.paste = !root.paste; } }
+                                paste-focus := FocusScope {
+                                    key-pressed(event) => {
+                                        if event.text == " " || event.text == "\n" { root.paste = !root.paste; return accept; }
+                                        return reject;
+                                    }
+                                }
+                            }
+                            if root.paste : VerticalLayout {
+                                padding-left: 18px; padding-right: 18px; padding-bottom: 18px; spacing: 12px;
+                                Text {
+                                    text: "Export from a private window so YouTube doesn't change these cookies while you use them elsewhere.";
+                                    font-size: 13px; color: Theme.muted; wrap: word-wrap;
+                                }
+                                VerticalLayout {
+                                    spacing: 2px;
+                                    chrome-guide := Guide {
+                                        title: "Chrome, Chromium, Edge or Brave";
+                                        steps: [
+                                            "Install \"Get cookies.txt LOCALLY\" from the Chrome Web Store, then allow it in Incognito (Manage extension → Allow in Incognito). Don't use the older \"Get cookies.txt\" without LOCALLY, which was removed as malware.",
+                                            "Open a new Incognito window and sign in to YouTube.",
+                                            "In the same tab, go to youtube.com/robots.txt. Keep it the only Incognito tab.",
+                                            "Click the extension, keep the Netscape format and choose Copy.",
+                                            "Paste below, then close the Incognito window without opening YouTube in it again."
+                                        ];
+                                    }
+                                    firefox-guide := Guide {
+                                        title: "Firefox, Zen or LibreWolf";
+                                        steps: [
+                                            "Install the \"cookies.txt\" add-on from addons.mozilla.org, then allow it in private windows (Manage → Run in Private Windows).",
+                                            "Open a new private window and sign in to YouTube.",
+                                            "In the same tab, go to youtube.com/robots.txt. Keep it the only private tab.",
+                                            "Click the add-on and export the current site. Open the downloaded file in a text editor and copy everything.",
+                                            "Paste below, then close the private window without opening YouTube in it again."
+                                        ];
+                                    }
+                                    devtools-guide := Guide {
+                                        title: "Without an extension (DevTools)";
+                                        steps: [
+                                            "Open a new private window, sign in to YouTube, then go to youtube.com/robots.txt in the same tab.",
+                                            "Open DevTools (F12, or ⌥⌘I on a Mac) and choose the Network tab.",
+                                            "Reload the page and select the robots.txt request.",
+                                            "Under Request Headers, copy the whole value of Cookie.",
+                                            "Paste below, then close the private window without opening YouTube in it again."
+                                        ];
+                                    }
+                                }
+                                if !root.replacing : PillInput {
+                                    border-radius: 10px; background: Theme.raised;
+                                    placeholder: "Name (optional), for example Work";
+                                    text <=> AppState.paste-name;
+                                    enabled: !AppState.busy;
+                                }
+                                paste-box := Rectangle {
+                                    height: 150px; border-radius: 10px; border-width: 1px;
+                                    border-color: paste-input.has-focus ? #4a4a55 : Theme.border; background: Theme.raised;
+                                    ScrollView {
+                                        x: 12px; y: 10px; width: parent.width - 24px; height: parent.height - 20px;
+                                        horizontal-scrollbar-policy: always-off;
+                                        content-height: max(self.visible-height, paste-input.preferred-height);
+                                        paste-input := TextInput {
+                                            width: parent.width; height: max(parent.height, self.preferred-height);
+                                            single-line: false; wrap: char-wrap;
+                                            font-family: "monospace"; font-size: 12px; color: Theme.text;
+                                            text <=> AppState.paste-text;
+                                            enabled: !AppState.busy;
+                                            accessible-label: "Pasted cookies";
+                                            edited => { AppState.paste-error = ""; }
+                                        }
+                                    }
+                                    if AppState.paste-text == "" : Text {
+                                        x: 12px; y: 10px; width: parent.width - 24px;
+                                        text: "Paste a cookies.txt file, a JSON export or a Cookie header…";
+                                        font-family: "monospace"; font-size: 12px; color: #52525b; wrap: word-wrap;
+                                    }
+                                }
+                                if AppState.paste-error != "" : Notice { message: AppState.paste-error; tint: #f87171; }
+                                if root.replacing : HorizontalLayout {
+                                    alignment: start;
+                                    ActionButton {
+                                        text: "Paste a new profile instead"; quiet: true; height: 34px;
+                                        clicked => { AppState.replace-target = ""; AppState.replace-name = ""; }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Rectangle { height: 16px; }
                     card := Rectangle {
                         border-radius: 14px; background: Theme.surface; border-width: 1px; border-color: #1e1e23;
                         VerticalLayout {
@@ -363,7 +638,7 @@ export component BrowserPicker inherits Rectangle {
                         }
                     }
                     use := ActionButton {
-                        text: root.choice == "" ? "Use this profile" : "Use " + root.choice;
+                        text: root.paste && root.replacing ? "Replace cookies" : root.choice == "" ? "Use this profile" : "Use " + root.choice;
                         width-limit: root.narrow ? 240px : 280px;
                         primary: root.choice != ""; height: 44px;
                         enabled: root.choice != "" && !AppState.busy && !AppState.profile-dialog-open;

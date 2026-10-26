@@ -19,10 +19,11 @@ export component AppWindow inherits Window {
             Button { text: "Feed"; clicked => { AppState.startup-failed = false; AppState.startup-step = 2; } }
         }
         HorizontalLayout {
-            Button { text: "Cookie error"; clicked => { AppState.startup-step = 0; AppState.startup-failed = true; AppState.error = "This profile has no usable YouTube sign-in. Sign in to YouTube in that profile and retry."; } }
+            Button { text: "Cookie error"; clicked => { AppState.startup-pasted-path = ""; AppState.startup-step = 0; AppState.startup-failed = true; AppState.error = "This profile has no usable YouTube sign-in. Sign in to YouTube in that profile and retry."; } }
             Button { text: "Offline"; clicked => { AppState.startup-step = 1; AppState.startup-failed = true; AppState.error = "Check your internet connection. If you were signed out, sign in to YouTube in Helium and try again."; } }
             Button { text: "Feed error"; clicked => { AppState.startup-step = 2; AppState.startup-failed = true; AppState.error = "YouTube returned an unfamiliar page format. Please refresh or update the app."; } }
             Button { text: "No profile"; clicked => { AppState.startup-label = ""; } }
+            Button { text: "Pasted expired"; clicked => { AppState.startup-label = "Pasted cookies · Work"; AppState.startup-initial = "P"; AppState.startup-pasted-path = "/mock/cookies/aa.bin"; AppState.startup-pasted-name = "Work channel"; AppState.startup-step = 1; AppState.startup-failed = true; AppState.error = "Could not verify this YouTube session. Paste new cookies for this profile."; } }
         }
         HorizontalLayout {
             Button { text: "Long profile"; clicked => { AppState.startup-label = "Example Browser · An extremely long browser profile name for testing"; } }

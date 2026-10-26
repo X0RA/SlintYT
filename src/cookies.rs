@@ -3,11 +3,15 @@
 mod crypto;
 #[cfg(target_os = "linux")]
 mod linux;
+mod pasted;
 mod safari;
 #[cfg(test)]
 mod tests;
+pub mod vault;
 #[cfg(windows)]
 mod windows;
+
+pub use pasted::parse as parse_pasted;
 
 use crate::browser::Selection;
 use anyhow::{Context, Result, bail};
@@ -41,6 +45,10 @@ pub async fn read(selection: &Selection) -> Result<String> {
 }
 
 async fn read_inner(selection: &Selection) -> Result<String> {
+    if selection.pasted() {
+        // Parsed again so an edited or older file still yields clean output.
+        return parse_pasted(&vault::load(&selection.profile).await?);
+    }
     let selected = selection.clone();
     let now = crate::history::now() as i64;
     if selection.browser == "firefox" || selection.browser == "safari" {

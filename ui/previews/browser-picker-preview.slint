@@ -17,6 +17,11 @@ export component AppWindow inherits Window {
         { name: "scoped_dir1u6oJ7", path: "/home/example/.config/chromium-headless/scoped_dir1u6oJ7/Default", group: "Temporary profiles", initials: "TP", tone: #2e2e35, root: "made by automation and test tools", first: true, temporary: true },
         { name: "scoped_dir375MJK", path: "/home/example/.config/chromium-headless/scoped_dir375MJK/Default", group: "Temporary profiles", initials: "TP", tone: #2e2e35, root: "made by automation and test tools", temporary: true }
     ];
+    private property <[BrowserProfile]> pasted: [
+        { name: "Work channel", label: "Pasted cookies · Work", path: "/mock/cookies/aa.bin", initials: "WC", pasted: true },
+        { name: "Example creator", label: "Helium · Default", initials: "EC" },
+        { name: "A pasted profile with a very long YouTube channel name", label: "Pasted cookies · A long name given to these cookies", path: "/mock/cookies/bb.bin", initials: "AP", pasted: true }
+    ];
     init => {
         Palette.color-scheme = ColorScheme.dark;
         AppState.profiles = root.grouped;
@@ -34,7 +39,14 @@ export component AppWindow inherits Window {
             Button { text: "Scan limit"; clicked => { AppState.scan-warning = "The scan stopped at its limit, so some profiles may be missing."; } }
             Button { text: "Error"; clicked => { AppState.error = "No cookie database was found in this exact profile. Choose another profile or check the path."; } }
             Button { text: "First run"; clicked => { AppState.connected = !AppState.connected; } }
+            Button { text: "Saved pasted"; clicked => { AppState.saved-profiles = AppState.pasted-profile-count > 0 ? [] : root.pasted; AppState.pasted-profile-count = AppState.pasted-profile-count > 0 ? 0 : 2; } }
             Button { text: "Compact"; clicked => { root.width = root.width < 700px ? 900px : 480px; root.height = root.width < 700px ? 640px : 860px; } }
+        }
+        HorizontalLayout {
+            Button { text: "Paste open"; clicked => { AppState.paste-open = !AppState.paste-open; } }
+            Button { text: "Paste filled"; clicked => { AppState.paste-open = true; AppState.paste-name = "Work"; AppState.paste-text = "# Netscape HTTP Cookie File\n.youtube.com  TRUE  /  TRUE  0  SAPISID  mock-value\n.youtube.com  TRUE  /  TRUE  0  SID  mock-value-with-a-much-longer-body-that-wraps-across-the-box"; } }
+            Button { text: "Paste error"; clicked => { AppState.paste-open = true; AppState.paste-error = "These cookies aren't signed in to YouTube. Export them while signed in to youtube.com, then paste them again."; } }
+            Button { text: "Replace"; clicked => { AppState.saved-profiles = root.pasted; AppState.pasted-profile-count = 2; AppState.replace-target = AppState.replace-target != "" ? "" : root.pasted[0].path; AppState.replace-name = root.pasted[0].name; AppState.paste-open = true; } }
         }
         Text { text: root.last; color: #8a8a93; accessible-role: text; accessible-label: self.text; }
         BrowserPicker {
@@ -43,6 +55,9 @@ export component AppWindow inherits Window {
             browse => { AppState.manual-profile-path = "/example/browser/Profile 3"; root.last = "Mock folder chosen"; }
             use-profile(index, keyring) => { root.last = "Selected profile " + index + ", keyring " + keyring; }
             use-folder(path, keyring) => { root.last = "Selected folder " + path + ", keyring " + keyring; }
+            use-pasted(text, name, replace) => { root.last = "Pasted " + text.character-count + " characters, name '" + name + "', replacing '" + replace + "'"; }
+            use-saved(path) => { root.last = "Selected saved profile " + path; }
+            remove-saved(index) => { root.last = "Removed saved profile " + index; }
         }
     }
 }

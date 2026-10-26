@@ -27,6 +27,17 @@ enum Command {
     ConnectIndex(usize, i32),
     ConnectSaved(usize),
     Connect(Selection),
+    /// Pasted cookies for a new profile, or to replace a saved one's cookies.
+    ConnectPasted {
+        text: String,
+        name: String,
+        /// Vault path of the saved profile being replaced.
+        replace: Option<std::path::PathBuf>,
+    },
+    /// A saved pasted profile picked by its vault path, which stays valid
+    /// when the saved list changes.
+    ConnectSavedPath(std::path::PathBuf),
+    RemoveProfile(Selection),
     /// Try the last connection attempt again from the start-up splash.
     Retry,
     /// Leave the splash (cancelling any connection) and open the profile picker.
@@ -85,6 +96,37 @@ pub fn wire(app: &AppWindow) -> (tokio::runtime::Runtime, Arc<crate::player::Pla
                 state.invoke_player_close();
             }
             let _ = send.send(Command::ConnectSaved(index as usize));
+        }
+    });
+    let (send, weak) = (sender.clone(), app.as_weak());
+    ui.on_connect_pasted(move |text, name, replace| {
+        if begin(&weak, "Checking the pasted cookies…") {
+            if let Some(app) = weak.upgrade() {
+                app.global::<AppState>().set_paste_error("".into());
+            }
+            let _ = send.send(Command::ConnectPasted {
+                text: text.to_string(),
+                name: name.trim().chars().take(60).collect(),
+                replace: (!replace.is_empty()).then(|| replace.as_str().into()),
+            });
+        }
+    });
+    let (send, weak) = (sender.clone(), app.as_weak());
+    ui.on_connect_saved_path(move |path| {
+        if !path.is_empty() && begin(&weak, "Connecting saved profile…") {
+            let _ = send.send(Command::ConnectSavedPath(path.as_str().into()));
+        }
+    });
+    let (send, weak) = (sender.clone(), app.as_weak());
+    ui.on_remove_profile(move |index| {
+        if let Some(app) = weak.upgrade() {
+            let state = app.global::<AppState>();
+            // Capture the identity from the displayed model before queuing.
+            // The worker's list may change before it receives this command.
+            if let Some(selection) = removal_selection(&state.get_saved_profiles(), index) {
+                state.set_account_menu_open(false);
+                let _ = send.send(Command::RemoveProfile(selection));
+            }
         }
     });
     ui.on_matches(|name, query| name.to_lowercase().contains(&query.to_lowercase()));
@@ -277,6 +319,7 @@ pub fn wire(app: &AppWindow) -> (tokio::runtime::Runtime, Arc<crate::player::Pla
     });
     ui.set_busy(true);
     ui.set_status("Looking for your saved browser…".into());
+    runtime.spawn(crate::cookies::vault::retry_pending());
     runtime.spawn(worker(
         receiver,
         sender.clone(),
@@ -542,6 +585,11 @@ fn publish_watch(weak: &slint::Weak<AppWindow>, session: &Session, videos: &mut 
     });
 }
 
+fn removal_selection(rows: &ModelRc<BrowserProfile>, index: i32) -> Option<Selection> {
+    let row = rows.row_data(usize::try_from(index).ok()?)?;
+    serde_json::from_str(&row.selection_key).ok()
+}
+
 fn publish_saved_profiles(
     weak: &slint::Weak<AppWindow>,
     settings: &crate::config::Settings,
@@ -559,7 +607,11 @@ fn publish_saved_profiles(
         .profiles
         .iter()
         .map(|p| BrowserProfile {
-            label: p.selection.label().into(),
+            selection_key: serde_json::to_string(&p.selection)
+                .unwrap_or_default()
+                .into(),
+            label: p.label().into(),
+            pasted: p.selection.pasted(),
             path: p.selection.profile.to_string_lossy().into_owned().into(),
             name: if p.youtube.name.is_empty() {
                 "YouTube profile".into()
@@ -579,6 +631,7 @@ fn publish_saved_profiles(
             ui.set_account_avatar(current.avatar.clone());
             ui.set_account_label(current.label.clone());
         }
+        ui.set_pasted_profile_count(rows.iter().filter(|r| r.pasted).count() as i32);
         ui.set_saved_profiles(ModelRc::new(VecModel::from(rows)));
         ui.set_active_profile(active);
     });
@@ -597,6 +650,9 @@ async fn worker(
     let mut profiles = Vec::<Selection>::new();
     let mut saved_profiles = Vec::<Selection>::new();
     let mut last_attempt: Option<Selection> = None;
+    // Set while a freshly saved pasted profile is being tried. Its vault file
+    // is deleted again unless the connection succeeds.
+    let mut pending_paste: Option<PendingPaste> = None;
     let mut session: Option<Arc<Session>> = None;
     let mut current_view = View::Home;
     let mut feed = FeedPage::default();
@@ -745,6 +801,157 @@ async fn worker(
                 })
             }
             Command::Connect(selection) => connect = Some(selection),
+            Command::ConnectPasted {
+                text,
+                name,
+                replace,
+            } => {
+                let text = zeroize::Zeroizing::new(text);
+                let pending = match replace {
+                    Some(path) => match saved_pasted(&saved_profiles, &path) {
+                        Some(old) => PendingPaste::Replace(old),
+                        None => {
+                            paste_failed(&weak, "This profile is no longer saved.".into());
+                            continue;
+                        }
+                    },
+                    None => PendingPaste::New(name),
+                };
+                let (clean, path) = match crate::cookies::parse_pasted(&text).and_then(|clean| {
+                    Ok((
+                        zeroize::Zeroizing::new(clean),
+                        crate::cookies::vault::reserve()?,
+                    ))
+                }) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        paste_failed(&weak, error.to_string());
+                        continue;
+                    }
+                };
+                // A keyring unlock prompt can wait forever, so saving is bounded
+                // and cancellable like connecting; anything half-written is removed.
+                let mut cancelled = cancel.clone();
+                let saved = tokio::select! {
+                    biased;
+                    _ = cancelled.changed() => None,
+                    result = tokio::time::timeout(VAULT_TIMEOUT, crate::cookies::vault::save(&path, &clean)) => Some(result),
+                };
+                match saved {
+                    Some(Ok(Ok(()))) => {
+                        pending_paste = Some(pending);
+                        connect = Some(Selection::pasted_file(path));
+                    }
+                    Some(Ok(Err(error))) => {
+                        paste_failed(&weak, error.to_string());
+                        continue;
+                    }
+                    Some(Err(_)) => {
+                        forget_vault(&weak, path, None);
+                        paste_failed(
+                            &weak,
+                            "Saving the cookies timed out. Unlock your system keyring, then retry."
+                                .into(),
+                        );
+                        continue;
+                    }
+                    // Cancelled: the queued ChangeBrowser command follows.
+                    None => {
+                        forget_vault(&weak, path, None);
+                        continue;
+                    }
+                }
+            }
+            Command::ConnectSavedPath(path) => match saved_pasted(&saved_profiles, &path) {
+                Some(selection) => connect = Some(selection),
+                None => {
+                    fail(&weak, "This profile is no longer saved.".into());
+                    continue;
+                }
+            },
+            Command::RemoveProfile(removed) => {
+                if !saved_profiles.contains(&removed) {
+                    continue;
+                }
+                let result = Store::new().and_then(|store| {
+                    let name = store
+                        .load_settings()?
+                        .profiles
+                        .iter()
+                        .find(|p| p.selection == removed)
+                        .map(|p| match p.youtube.name.as_str() {
+                            "" => p.label(),
+                            name => name.to_owned(),
+                        })
+                        .unwrap_or_else(|| removed.label());
+                    let current = store.remove_profile(&removed)?;
+                    Ok((current, name, store.load_settings()?))
+                });
+                let (current, name, settings) = match result {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let message = format!("Could not remove the profile: {error}");
+                        update(&weak, move |app| {
+                            app.global::<AppState>().set_toast(message.into())
+                        });
+                        continue;
+                    }
+                };
+                saved_profiles = publish_saved_profiles(&weak, &settings);
+                // A pending replace of the removed profile must not linger.
+                let path = removed.profile.to_string_lossy().into_owned();
+                update(&weak, move |app| {
+                    let state = app.global::<AppState>();
+                    if state.get_replace_target() == path.as_str() {
+                        state.set_replace_target("".into());
+                        state.set_replace_name("".into());
+                    }
+                });
+                if removed.pasted() {
+                    forget_vault(&weak, removed.profile.clone(), Some(name));
+                } else {
+                    let message = format!("Removed {name}");
+                    update(&weak, move |app| {
+                        app.global::<AppState>().set_toast(message.into())
+                    });
+                }
+                if last_attempt.as_ref() == Some(&removed) {
+                    last_attempt = None;
+                }
+                if !current {
+                    continue;
+                }
+                // The account in use is gone: drop it and choose another profile.
+                cancel.borrow_and_update();
+                if let Some(task) = active.take() {
+                    task.abort();
+                }
+                if let Some(old) = session.take()
+                    && let Some(bookmarks) = &old.bookmarks
+                {
+                    bookmarks.suspend();
+                }
+                *session_slot.write().unwrap() = None;
+                player.clear_session();
+                pages.clear();
+                images.clear();
+                feed = FeedPage::default();
+                update(&weak, |app| {
+                    let state = app.global::<AppState>();
+                    state.invoke_player_close();
+                    state.set_connected(false);
+                    state.set_videos(ModelRc::default());
+                    state.set_sections(ModelRc::default());
+                    state.set_initializing(false);
+                    state.set_startup_failed(false);
+                    state.set_settings_open(false);
+                    state.set_setup_open(true);
+                    state.set_busy(true);
+                    state.set_error("".into());
+                    state.set_status("Looking for browser profiles…".into());
+                });
+                scan = true;
+            }
             Command::PlaylistChanged {
                 bookmarks_current,
                 playlist,
@@ -827,8 +1034,30 @@ async fn worker(
         if let Some(selection) = connect {
             last_attempt = Some(selection.clone());
             let label = selection.label();
+            // Only a saved pasted profile can have its cookies replaced from the splash.
+            let (pasted_path, pasted_name) = match saved_pasted(&saved_profiles, &selection.profile)
+            {
+                Some(_) => (
+                    selection.profile.to_string_lossy().into_owned(),
+                    Store::new()
+                        .and_then(|s| s.load_settings())
+                        .ok()
+                        .and_then(|s| s.profiles.into_iter().find(|p| p.selection == selection))
+                        .map(|p| {
+                            if p.youtube.name.is_empty() {
+                                p.label()
+                            } else {
+                                p.youtube.name
+                            }
+                        })
+                        .unwrap_or_else(|| "this profile".into()),
+                ),
+                None => (String::new(), String::new()),
+            };
             update_startup(&weak, &cancel, move |app| {
                 let state = app.global::<AppState>();
+                state.set_startup_pasted_path(pasted_path.into());
+                state.set_startup_pasted_name(pasted_name.into());
                 let initial = label.chars().next().map(|c| c.to_uppercase().to_string());
                 state.set_startup_initial(initial.unwrap_or_default().into());
                 state.set_startup_label(label.into());
@@ -854,10 +1083,26 @@ async fn worker(
                 result = attempt => Some(result),
             };
             // Cancelled from the splash: the queued ChangeBrowser command follows.
-            let Some(result) = result else { continue };
+            let Some(result) = result else {
+                if pending_paste.take().is_some() {
+                    forget_vault(&weak, selection.profile.clone(), None);
+                    last_attempt = None;
+                }
+                continue;
+            };
             match result {
                 Ok(Ok(new_session)) => {
-                    if let Err(error) = Store::new().and_then(|s| s.save(&selection)) {
+                    let pending = pending_paste.take();
+                    let saved = Store::new().and_then(|s| match &pending {
+                        Some(PendingPaste::New(name)) => s.save_named(&selection, name),
+                        Some(PendingPaste::Replace(old)) => s.replace_selection(old, &selection),
+                        None => s.save(&selection),
+                    });
+                    if let Err(error) = saved {
+                        if pending.is_some() {
+                            forget_vault(&weak, selection.profile.clone(), None);
+                            last_attempt = None;
+                        }
                         fail(
                             &weak,
                             format!(
@@ -866,7 +1111,17 @@ async fn worker(
                         );
                         continue;
                     }
+                    // The replaced cookies are only removed once the new ones are saved.
+                    if let Some(PendingPaste::Replace(old)) = &pending {
+                        forget_vault(&weak, old.profile.clone(), None);
+                    }
+                    let mut saved_label = selection.label();
                     if let Ok(settings) = Store::new().and_then(|s| s.load_settings()) {
+                        if let Some(profile) =
+                            settings.profiles.iter().find(|p| p.selection == selection)
+                        {
+                            saved_label = profile.label();
+                        }
                         saved_profiles = publish_saved_profiles(&weak, &settings);
                     }
                     let epoch = generation.fetch_add(1, Ordering::Relaxed) + 1;
@@ -896,9 +1151,16 @@ async fn worker(
                     }
                     pages.clear();
                     images.clear();
-                    let label = selection.label();
+                    let label = saved_label;
                     update_startup(&weak, &cancel, move |app| {
                         apply_sync_status(&app, sync);
+                        let state = app.global::<AppState>();
+                        state.set_paste_open(false);
+                        state.set_paste_text("".into());
+                        state.set_paste_name("".into());
+                        state.set_paste_error("".into());
+                        state.set_replace_target("".into());
+                        state.set_replace_name("".into());
                         prepare(&app, &View::Home);
                         let state = app.global::<AppState>();
                         state.set_comments(ModelRc::default());
@@ -930,6 +1192,13 @@ async fn worker(
                 }
                 result => {
                     let message = match result { Ok(Err(e)) => e.to_string(), _ => "Connecting timed out. Unlock your keyring and check your internet connection, then retry.".into() };
+                    // Cookies that never connected are not kept; the paste stays in the box.
+                    if pending_paste.take().is_some() {
+                        forget_vault(&weak, selection.profile.clone(), None);
+                        last_attempt = None;
+                        paste_failed(&weak, message);
+                        continue;
+                    }
                     fail(&weak, message);
                     continue;
                 }
@@ -1143,6 +1412,66 @@ fn fail_page(
     });
 }
 
+/// Upper bound for one vault operation, which may wait on a keyring prompt.
+const VAULT_TIMEOUT: Duration = Duration::from_secs(60);
+
+fn saved_pasted(saved: &[Selection], path: &std::path::Path) -> Option<Selection> {
+    saved
+        .iter()
+        .find(|p| p.pasted() && p.profile == path)
+        .cloned()
+}
+
+/// Deletes saved cookies off the worker, bounded, so a stalled keyring never
+/// blocks other commands. With `removed`, reports the result in a toast.
+fn forget_vault(weak: &slint::Weak<AppWindow>, path: std::path::PathBuf, removed: Option<String>) {
+    // Erase the local cookies and persist the cleanup request before spawning.
+    // Shutdown may abort the task, but the next launch retries its marker.
+    if let Err(error) = crate::cookies::vault::prepare_delete(&path) {
+        let message = format!("Could not delete saved cookies: {error}");
+        update(weak, move |app| {
+            app.global::<AppState>().set_toast(message.into())
+        });
+        return;
+    }
+    let weak = weak.clone();
+    tokio::spawn(async move {
+        let result = tokio::time::timeout(VAULT_TIMEOUT, crate::cookies::vault::delete(&path))
+            .await
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("the system keyring did not respond")));
+        if let Some(name) = removed {
+            let message = match result {
+                Ok(()) => format!("Removed {name}"),
+                Err(error) => {
+                    format!("Removed {name}, but its saved cookies could not be deleted: {error}")
+                }
+            };
+            update(&weak, move |app| {
+                app.global::<AppState>().set_toast(message.into())
+            });
+        }
+    });
+}
+
+enum PendingPaste {
+    New(String),
+    Replace(Selection),
+}
+
+/// Paste problems stay in the picker next to the paste box, not the splash.
+fn paste_failed(weak: &slint::Weak<AppWindow>, message: String) {
+    update(weak, move |app| {
+        let state = app.global::<AppState>();
+        state.set_initializing(false);
+        state.set_startup_failed(false);
+        state.set_setup_open(true);
+        state.set_paste_open(true);
+        state.set_paste_error(message.into());
+        state.set_status("".into());
+        state.set_busy(false);
+    });
+}
+
 fn fail(weak: &slint::Weak<AppWindow>, message: String) {
     update(weak, move |app| {
         let state = app.global::<AppState>();
@@ -1353,4 +1682,39 @@ pub(crate) fn reflow(app: &AppWindow, columns: i32) {
         }
     }
     state.set_sections(ModelRc::new(VecModel::from(rows)));
+}
+
+#[cfg(test)]
+mod profile_removal_tests {
+    use super::*;
+
+    #[test]
+    fn queued_removals_keep_the_displayed_identity_after_indices_shift() {
+        let a = Selection::pasted_file("/cookies/a.bin".into());
+        let b = Selection::pasted_file("/cookies/b.bin".into());
+        let c = Selection::pasted_file("/cookies/c.bin".into());
+        let rows = ModelRc::new(VecModel::from(
+            [&a, &b, &c]
+                .into_iter()
+                .map(|selection| BrowserProfile {
+                    selection_key: serde_json::to_string(selection).unwrap().into(),
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>(),
+        ));
+        let queued = [
+            removal_selection(&rows, 0).unwrap(),
+            removal_selection(&rows, 1).unwrap(),
+        ];
+        let mut saved = vec![a.clone(), b, c.clone()];
+        for removed in queued {
+            saved.retain(|p| p != &removed);
+        }
+        assert_eq!(saved, [c]);
+        // A repeat of an already removed identity cannot remove its successor.
+        saved.retain(|p| p != &a);
+        assert_eq!(saved.len(), 1);
+        assert!(removal_selection(&rows, -1).is_none());
+        assert!(removal_selection(&rows, 3).is_none());
+    }
 }

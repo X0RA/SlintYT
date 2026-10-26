@@ -11,6 +11,7 @@ rfd = "0.17.2"
 glow = "0.18"
 anyhow = "1"
 aes = "0.8"
+aes-gcm = "0.10"
 cbc = { version = "0.1", features = ["alloc"] }
 pbkdf2 = "0.12"
 sha1 = "0.10"
@@ -39,7 +40,6 @@ souvlaki = "0.8"
 
 [target.'cfg(windows)'.dependencies]
 raw-window-handle = "0.6"
-aes-gcm = "0.10"
 base64 = "0.22"
 windows-sys = { version = "0.61", features = ["Win32_Security_Cryptography", "Win32_Foundation"] }
 

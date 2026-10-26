@@ -11,16 +11,23 @@ import { SyncMenu } from "components/sync-menu.slint";
 import { SearchBar } from "components/search-bar.slint";
 import { ActionButton } from "components/action-button.slint";
 import { Avatar } from "components/avatar.slint";
+import { Icon } from "components/icon.slint";
 import { MenuItem, MenuSurface } from "components/menu-item.slint";
 export component AppContent inherits Rectangle {
     callback switch-profile(int);
     switch-profile(index) => { AppState.switch-profile(index); }
+    callback remove-profile(int);
+    remove-profile(index) => { AppState.remove-profile(index); }
     private property <bool> narrow: root.width < 700px;
     private property <int> other-profiles: max(0, AppState.saved-profiles.length - (AppState.active-profile >= 0 && AppState.active-profile < AppState.saved-profiles.length ? 1 : 0));
     // Space kept clear for the floating search bar. Feeds scroll underneath it.
     private property <length> inset: 24px + 48px + 32px;
     private property <int> active: AppState.settings-open ? 7 : AppState.view-kind;
     init => { app-keys.focus(); }
+    // Saved-profile index awaiting a second click to remove, or -2.
+    private property <int> confirm-remove: -2;
+    private property <bool> menu-open: AppState.account-menu-open;
+    changed menu-open => { root.confirm-remove = -2; }
     private property <bool> player-active: AppState.player-open;
     changed player-active => { if !root.player-active { app-keys.focus(); } }
     function navigate(kind: int) {
@@ -125,25 +132,69 @@ export component AppContent inherits Rectangle {
                             height: index == AppState.active-profile ? 0px : 52px;
                             vertical-stretch: 0;
                             if index != AppState.active-profile : Rectangle {
+                                property <bool> confirming: root.confirm-remove == index;
                                 border-radius: 8px;
-                                background: profile-touch.has-hover ? Theme.raised : transparent;
+                                background: profile-touch.has-hover || self.confirming ? Theme.raised : transparent;
                                 accessible-role: button;
                                 accessible-label: profile.name;
                                 accessible-description: profile.label;
-                                accessible-enabled: !AppState.busy;
-                                accessible-action-default => { if !AppState.busy { root.switch-profile(index); } }
-                                HorizontalLayout {
-                                    padding-left: 8px; padding-right: 8px; spacing: 11px; cross-axis-alignment: center;
-                                    Avatar { width: 32px; initials: profile.initials; url: profile.avatar; tone: #26262c; accessible-role: none; }
-                                    VerticalLayout { alignment: center; spacing: 2px;
-                                        Text { text: profile.name; color: Theme.text; font-size: 13px; font-weight: 600; overflow: elide; }
-                                        Text { text: profile.label; color: Theme.muted; font-size: 11px; overflow: elide; }
-                                    }
-                                }
+                                accessible-enabled: !AppState.busy && !self.confirming;
+                                accessible-action-default => { if !AppState.busy && !self.confirming { root.switch-profile(index); } }
+                                // Under the row content so the remove buttons stay clickable.
                                 profile-touch := TouchArea {
-                                    enabled: !AppState.busy; mouse-cursor: pointer;
+                                    enabled: !AppState.busy && !parent.confirming; mouse-cursor: pointer;
                                     clicked => { root.switch-profile(index); }
                                 }
+                                HorizontalLayout {
+                                    padding-left: 8px; padding-right: 4px; spacing: 11px; cross-axis-alignment: center;
+                                    Avatar { width: 32px; initials: profile.initials; url: profile.avatar; tone: #26262c; accessible-role: none; }
+                                    VerticalLayout { horizontal-stretch: 1; alignment: center; spacing: 2px;
+                                        Text { text: root.confirm-remove == index ? "Remove " + profile.name + "?" : profile.name; color: Theme.text; font-size: 13px; font-weight: 600; overflow: elide; }
+                                        Text { text: root.confirm-remove != index ? profile.label : profile.pasted ? "Its saved cookies are deleted." : "Your browser isn't changed."; color: Theme.muted; font-size: 11px; overflow: elide; }
+                                    }
+                                    if root.confirm-remove != index : remove-profile := Rectangle {
+                                        width: 28px; height: 28px; border-radius: 14px;
+                                        opacity: profile-touch.has-hover || remove-touch.has-hover || remove-focus.has-focus || root.narrow ? 1 : 0;
+                                        background: remove-touch.has-hover ? #2e2e35 : transparent;
+                                        border-width: remove-focus.has-focus ? 1px : 0px; border-color: #7aa2ff;
+                                        accessible-role: button; accessible-label: "Remove " + profile.name;
+                                        accessible-action-default => { root.confirm-remove = index; }
+                                        Icon { name: "close"; width: 14px; height: 14px; tint: Theme.muted; }
+                                        remove-touch := TouchArea { mouse-cursor: pointer; clicked => { root.confirm-remove = index; } }
+                                        remove-focus := FocusScope {
+                                            key-pressed(event) => {
+                                                if event.text == " " || event.text == "\n" { root.confirm-remove = index; return accept; }
+                                                return reject;
+                                            }
+                                        }
+                                    }
+                                    if root.confirm-remove == index : HorizontalLayout { spacing: 2px;
+                                        ActionButton { text: "Cancel"; quiet: true; height: 30px; clicked => { root.confirm-remove = -2; } }
+                                        confirm-remove-profile := ActionButton { text: "Remove"; outlined: true; height: 30px; enabled: !AppState.busy;
+                                            clicked => { root.confirm-remove = -2; root.remove-profile(index); }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if AppState.active-profile >= 0 && root.confirm-remove != AppState.active-profile : remove-current := MenuItem {
+                    text: "Remove this profile"; icon: "close"; min-height: 44px;
+                    clicked => { root.confirm-remove = AppState.active-profile; }
+                }
+                if AppState.active-profile >= 0 && root.confirm-remove == AppState.active-profile : HorizontalLayout {
+                    padding-left: 12px; padding-right: 4px; padding-top: 6px; padding-bottom: 6px; spacing: 4px;
+                    Text {
+                        horizontal-stretch: 1; text: "Remove " + AppState.account-name + "? You'll choose another profile.";
+                        color: Theme.text; font-size: 12.5px; wrap: word-wrap; vertical-alignment: center;
+                        accessible-role: text; accessible-label: self.text;
+                    }
+                    VerticalLayout { alignment: center;
+                        HorizontalLayout { spacing: 2px;
+                            ActionButton { text: "Cancel"; quiet: true; height: 30px; clicked => { root.confirm-remove = -2; } }
+                            confirm-remove-current := ActionButton { text: "Remove"; outlined: true; height: 30px; enabled: !AppState.busy;
+                                clicked => { root.confirm-remove = -2; root.remove-profile(AppState.active-profile); }
                             }
                         }
                     }

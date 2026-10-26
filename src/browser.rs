@@ -20,8 +20,34 @@ pub struct Selection {
     pub keyring: Option<String>,
 }
 
+/// `browser` of a profile made from pasted cookies; `profile` is its vault file.
+pub const PASTED: &str = "pasted";
+
 impl Selection {
+    pub fn pasted_file(profile: PathBuf) -> Self {
+        Self {
+            browser: PASTED.into(),
+            profile,
+            keyring: None,
+        }
+    }
+
+    pub fn pasted(&self) -> bool {
+        self.browser == PASTED
+    }
+
     pub fn validate(&self) -> Result<()> {
+        if self.pasted() {
+            let folder = crate::cookies::vault::folder()?;
+            if crate::cookies::vault::id(&self.profile, &folder).is_none() || self.keyring.is_some()
+            {
+                bail!("This saved cookie profile is invalid. Paste the cookies again.");
+            }
+            if !self.profile.is_file() {
+                bail!("The saved cookies for this profile are missing. Paste new cookies.");
+            }
+            return Ok(());
+        }
         if !BROWSERS.contains(&self.browser.as_str()) {
             bail!("Choose a supported browser.");
         }
@@ -86,6 +112,9 @@ impl Selection {
     }
 
     pub fn label(&self) -> String {
+        if self.pasted() {
+            return "Pasted cookies".into();
+        }
         let profile = self
             .profile
             .file_name()

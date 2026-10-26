@@ -173,6 +173,15 @@ impl Playback {
         }
     }
 
+    /// Forgets the account entirely, used when its saved profile is removed.
+    pub fn clear_session(&self) {
+        self.cancel();
+        *self.progress.write().unwrap() = None;
+        self.cache.lock().unwrap().clear();
+        self.subtitle_choices.write().unwrap().clear();
+        *self.cookies.write().unwrap() = None;
+    }
+
     pub fn set_cookies(&self, cookies: Arc<str>) {
         self.cancel();
         *self.progress.write().unwrap() = None;

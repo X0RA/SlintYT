@@ -24,6 +24,19 @@ pub struct SavedProfile {
     pub selection: Selection,
     #[serde(default)]
     pub youtube: AccountProfile,
+    /// Optional name given to pasted cookies, shown in place of the browser label.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+}
+
+impl SavedProfile {
+    pub fn label(&self) -> String {
+        if self.name.is_empty() {
+            self.selection.label()
+        } else {
+            format!("{} · {}", self.selection.label(), self.name)
+        }
+    }
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -49,6 +62,7 @@ impl Settings {
             self.profiles.push(SavedProfile {
                 selection: selection.clone(),
                 youtube: AccountProfile::default(),
+                name: String::new(),
             });
         }
         self.current_profile = Some(selection.clone());
@@ -115,6 +129,49 @@ impl Store {
             self.write(&settings)?;
         }
         Ok(())
+    }
+
+    /// Remembers a pasted-cookie profile as current, with its optional name.
+    pub fn save_named(&self, selection: &Selection, name: &str) -> Result<()> {
+        let _guard = SETTINGS_WRITE.lock().unwrap();
+        let mut settings = self.load_settings()?;
+        settings.remember(selection);
+        if let Some(profile) = settings
+            .profiles
+            .iter_mut()
+            .find(|p| &p.selection == selection)
+        {
+            profile.name = name.trim().into();
+        }
+        self.write(&settings)
+    }
+
+    /// Forgets a saved profile. Returns whether it was the current one.
+    pub fn remove_profile(&self, selection: &Selection) -> Result<bool> {
+        let _guard = SETTINGS_WRITE.lock().unwrap();
+        let mut settings = self.load_settings()?;
+        settings.profiles.retain(|p| &p.selection != selection);
+        let current = settings.current_profile.as_ref() == Some(selection);
+        if current {
+            settings.current_profile = None;
+        }
+        self.write(&settings)?;
+        Ok(current)
+    }
+
+    /// Swaps in new cookies for a saved profile, keeping its name, account
+    /// and position, and makes it current.
+    pub fn replace_selection(&self, old: &Selection, new: &Selection) -> Result<()> {
+        let _guard = SETTINGS_WRITE.lock().unwrap();
+        let mut settings = self.load_settings()?;
+        let profile = settings
+            .profiles
+            .iter_mut()
+            .find(|p| &p.selection == old)
+            .context("This profile is no longer saved.")?;
+        profile.selection = new.clone();
+        settings.current_profile = Some(new.clone());
+        self.write(&settings)
     }
 
     pub fn save_bookmarks_enabled(&self, enabled: bool) -> Result<()> {
@@ -319,5 +376,52 @@ mod tests {
         }
         fs::write(store.root.join("settings.json"), "broken").unwrap();
         assert!(store.load().is_err());
+    }
+
+    #[test]
+    fn profiles_can_be_named_replaced_and_removed() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store {
+            root: root.path().into(),
+        };
+        let browser = Selection {
+            browser: "firefox".into(),
+            profile: root.path().join("personal"),
+            keyring: None,
+        };
+        let pasted = Selection::pasted_file(root.path().join("cookies/a.bin"));
+        store.save(&browser).unwrap();
+        store.save_named(&pasted, "  Work  ").unwrap();
+        let account = AccountProfile {
+            name: "Work channel".into(),
+            avatar: String::new(),
+        };
+        store.save_account(&pasted, account.clone()).unwrap();
+        let settings = store.load_settings().unwrap();
+        assert_eq!(settings.profiles[1].name, "Work");
+        assert_eq!(settings.profiles[1].label(), "Pasted cookies · Work");
+        assert_eq!(settings.profiles[0].label(), browser.label());
+
+        let replaced = Selection::pasted_file(root.path().join("cookies/b.bin"));
+        store.save(&browser).unwrap();
+        store.replace_selection(&pasted, &replaced).unwrap();
+        let settings = store.load_settings().unwrap();
+        assert_eq!(settings.current_profile, Some(replaced.clone()));
+        assert_eq!(settings.profiles[1].selection, replaced);
+        assert_eq!(settings.profiles[1].name, "Work");
+        assert_eq!(settings.profiles[1].youtube, account);
+        assert!(store.replace_selection(&pasted, &replaced).is_err());
+
+        // Removing another profile keeps the current one.
+        assert!(!store.remove_profile(&browser).unwrap());
+        let settings = store.load_settings().unwrap();
+        assert_eq!(settings.profiles.len(), 1);
+        assert_eq!(settings.current_profile, Some(replaced.clone()));
+        // Removing the current one clears it.
+        assert!(store.remove_profile(&replaced).unwrap());
+        let settings = store.load_settings().unwrap();
+        assert!(settings.profiles.is_empty());
+        assert_eq!(settings.current_profile, None);
+        assert_eq!(store.load().unwrap(), None);
     }
 }

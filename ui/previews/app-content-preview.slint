@@ -25,9 +25,10 @@ export component AppWindow inherits Window {
         AppState.account-profile = "Default";
         AppState.saved-profiles = [
             {name: "Second channel", label: "Helium · Profile 2", initials: "SC"},
+            {name: "Work channel", label: "Pasted cookies · Work", initials: "WC", pasted: true},
             {name: "Example creator", label: "Helium · Default", initials: "EC"}
         ];
-        AppState.active-profile = 1;
+        AppState.active-profile = 2;
         AppState.videos = [{ id: "abcdefghijk", title: "Building a desktop app with Rust and Slint", channel: "Example channel", initials:"EC", tone:#3b4a63, thumbnail:@image-url("mock-thumbnail.svg"), metadata: "12K views · 2 days ago", duration: "24:10", watched: 1, watch-progress: 42 }, { id: "lmnopqrstuv", title: "A very long title that wraps cleanly without hiding channel information", channel: "Workshop", initials:"W", tone:#5e4a35, thumbnail:@image-url("mock-thumbnail.svg"), metadata: "3K views · 1 week ago", duration: "1:12:36", watched: 2, watch-progress: -1 }, { id: "12345678901", title: "Live from the studio", channel: "Studio", initials:"S", tone:#3e5a4c, thumbnail:@image-url("mock-thumbnail.svg"), metadata: "Streaming now", duration: "LIVE", watched: 0, watch-progress: -1 }, { id: "abcdefghijl", title: "The quiet side of the city", channel: "On foot", initials:"OF", tone:#5a3f5e, thumbnail:@image-url("mock-thumbnail.svg"), metadata: "8K views · 3 days ago", duration: "18:27" }];
         AppState.watch-note = "Using cached watch history · 1273 watched videos. Refreshing recent watches…";
         AppState.sync-count = "1273";
@@ -84,6 +85,10 @@ export component AppWindow inherits Window {
                 AppState.account-label = AppState.saved-profiles[index].label;
                 AppState.account-initial = AppState.saved-profiles[index].initials;
                 AppState.account-avatar = AppState.saved-profiles[index].avatar;
+                AppState.account-menu-open = false;
+            }
+            remove-profile(index) => {
+                AppState.toast = "Removed " + AppState.saved-profiles[index].name;
                 AppState.account-menu-open = false;
             }
         }

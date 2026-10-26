@@ -128,6 +128,17 @@ export component AppLoading inherits Rectangle {
                 if root.failed : HorizontalLayout {
                     alignment: center; padding-top: 28px; spacing: 10px;
                     retry := ActionButton { text: "Try again"; primary: true; height: 44px; enabled: !AppState.busy; clicked => { root.retry(); } }
+                    // Pasted cookies expire; replacing them keeps the profile's name and account.
+                    // Targets the profile that failed, never the last connected one.
+                    if AppState.startup-pasted-path != "" : paste-new := ActionButton {
+                        text: "Paste new cookies"; outlined: true; height: 44px;
+                        clicked => {
+                            AppState.replace-target = AppState.startup-pasted-path;
+                            AppState.replace-name = AppState.startup-pasted-name;
+                            root.change-browser();
+                            AppState.paste-open = true;
+                        }
+                    }
                     change := ActionButton { text: "Change browser"; outlined: true; height: 44px; clicked => { root.change-browser(); } }
                 }
                 HorizontalLayout {

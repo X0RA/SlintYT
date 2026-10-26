@@ -211,6 +211,7 @@ fn native_video_playback_controls_resize_and_close() {
                 {
                     assert!(commands::AUDIO_CHANNELS.load(Ordering::Acquire) > 0);
                     if !online {
+                        assert_eq!(state.get_player_current_quality(), "180p · MPEG-4");
                         assert_eq!(engine.get_property::<f64>("speed").unwrap(), 1.5);
                         state.invoke_player_set_speed(2.);
                         *player.subtitle_choices.write().unwrap() = vec![subtitles::Track {
@@ -327,6 +328,7 @@ fn native_video_playback_controls_resize_and_close() {
                         commands::Update::Error(libmpv2::Error::Raw(-13), None),
                         commands::Update::Ended(true),
                         commands::Update::Position(999.),
+                        commands::Update::Quality("9999p · AV1".into()),
                     ] {
                         commands::publish(&app.as_weak(), player.epoch.clone(), old_epoch, update);
                     }
@@ -354,6 +356,7 @@ fn native_video_playback_controls_resize_and_close() {
                     stage.set(6);
                 }
                 6 if !state.get_player_loading() && state.get_player_position() > 0.3 => {
+                    assert_eq!(state.get_player_current_quality(), "180p · MPEG-4");
                     assert_eq!(engine.get_property::<f64>("speed").unwrap(), 1.);
                     assert!(state.get_player_error().is_empty());
                     assert!(!state.get_player_ended());

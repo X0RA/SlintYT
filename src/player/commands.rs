@@ -52,6 +52,7 @@ pub(super) enum Update {
     Position(f64),
     Seeked(f64),
     Speed(f64),
+    Quality(String),
     Duration(f64),
     Volume(f64),
     Buffering(bool),
@@ -144,6 +145,7 @@ pub(super) fn publish(
                 super::media_keys::seeked(v);
             }
             Update::Speed(v) if v.is_finite() && v > 0. => state.set_player_speed(v as f32),
+            Update::Quality(label) => state.set_player_current_quality(label.into()),
             Update::Duration(v) if v.is_finite() => state.set_player_duration(v.max(0.) as f32),
             Update::Volume(v) if v.is_finite() => state.set_player_volume(v as f32),
             Update::Buffering(v) => state.set_player_buffering(v),
@@ -207,10 +209,38 @@ fn observer(engine: &Mpv) -> libmpv2::Result<Mpv> {
         (5, "paused-for-cache", Format::Flag),
         (6, "eof-reached", Format::Flag),
         (7, "speed", Format::Double),
+        (8, "video-params/w", Format::Int64),
+        (9, "video-params/h", Format::Int64),
+        (10, "video-format", Format::String),
     ] {
         client.observe_property(name, format, index)?;
     }
     Ok(client)
+}
+
+fn quality_label(width: i64, height: i64, codec: &str) -> String {
+    if width <= 0 || height <= 0 {
+        return String::new();
+    }
+    // Match the settings' resolution convention for portrait videos.
+    let resolution = width.min(height);
+    match crate::playback_settings::codec_name(codec) {
+        Some(codec) => format!("{resolution}p · {codec}"),
+        None => format!("{resolution}p"),
+    }
+}
+
+fn current_quality(engine: &Mpv) -> Option<Update> {
+    let label = quality_label(
+        engine.get_property::<i64>("video-params/w").unwrap_or(0),
+        engine.get_property::<i64>("video-params/h").unwrap_or(0),
+        &engine
+            .get_property::<String>("video-format")
+            .unwrap_or_default(),
+    );
+    // Preserve the last known quality at EOF, when video properties disappear.
+    // A new load explicitly clears it before its property observer is created.
+    (!label.is_empty()).then_some(Update::Quality(label))
 }
 
 fn sample_progress(engine: &Mpv, tracker: &mut Option<super::progress::Tracker>) {
@@ -491,6 +521,9 @@ pub fn start(
                                 Some(Update::Buffering(v))
                             }
                             ("eof-reached", PropertyData::Flag(v)) => Some(Update::Ended(v)),
+                            ("video-params/w" | "video-params/h" | "video-format", _) => {
+                                current_quality(&engine)
+                            }
                             _ => None,
                         },
                         Ok(Event::EndFile(reason)) if reason == mpv_end_file_reason::Eof => {
@@ -541,6 +574,16 @@ pub fn start(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quality_labels_describe_the_decoded_stream_in_either_orientation() {
+        assert_eq!(quality_label(1280, 720, "av1"), "720p · AV1");
+        assert_eq!(quality_label(720, 1280, "av1"), "720p · AV1");
+        assert_eq!(quality_label(1280, 720, "vp9"), "720p · VP9");
+        assert_eq!(quality_label(854, 480, "h264"), "480p · H.264");
+        assert_eq!(quality_label(1920, 1080, ""), "1080p");
+        assert_eq!(quality_label(0, 0, "av1"), "");
+    }
     #[test]
     fn playback_failure_preserves_the_mpv_error_category() {
         let loading = playback_error(&libmpv2::Error::Raw(-13), None);

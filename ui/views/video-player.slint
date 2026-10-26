@@ -222,7 +222,7 @@ export component VideoPlayer inherits Rectangle {
                                 }
                                 Rectangle { horizontal-stretch: 1; }
                                 ControlButton { text: AppState.player-speed + "×"; tip: "Playback speed"; active: root.menu == 1; clicked => { root.menu = root.menu == 1 ? 0 : 1; } }
-                                ControlButton { text: AppState.player-qualities-loading && AppState.player-quality-index == 0 ? "Auto" : AppState.player-quality-index == 0 ? "Auto" : AppState.player-qualities[AppState.player-quality-index]; tip: "Video quality"; active: root.menu == 2; clicked => { root.menu = root.menu == 2 ? 0 : 2; } }
+                                quality-control := ControlButton { text: AppState.player-current-quality != "" ? AppState.player-current-quality : AppState.player-loading ? "Loading…" : "Quality"; tip: AppState.player-current-quality != "" ? "Video quality · " + AppState.player-current-quality : "Video quality"; active: root.menu == 2; clicked => { root.menu = root.menu == 2 ? 0 : 2; } }
                                 subtitles := ControlButton { icon: "subtitles"; tip: AppState.player-subtitle-index > 0 ? "Turn subtitles off (right-click for languages)" : "Choose subtitles"; pressed-state: AppState.player-subtitle-index > 0; active: root.menu == 3;
                                     clicked => { root.subtitles(); }
                                     right-clicked => { root.menu = root.menu == 3 ? 0 : 3; }

@@ -309,6 +309,7 @@ impl Playback {
         state.set_player_error("".into());
         state.set_player_progress_note("".into());
         state.set_player_loading(true);
+        state.set_player_current_quality("".into());
         state.set_player_buffering(false);
         state.set_player_ended(false);
         state.set_player_paused(start.paused);

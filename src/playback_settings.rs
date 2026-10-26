@@ -163,11 +163,11 @@ impl Preferences {
 }
 
 /// yt-dlp reports VP9 as both `vp9` and `vp09.*`, and H.264 as `avc1.*`.
-fn codec_name(vcodec: &str) -> Option<&'static str> {
+pub(crate) fn codec_name(vcodec: &str) -> Option<&'static str> {
     let vcodec = vcodec.to_ascii_lowercase();
     if vcodec.starts_with("vp9") || vcodec.starts_with("vp09") {
         Some("VP9")
-    } else if vcodec.starts_with("av01") {
+    } else if vcodec.starts_with("av01") || vcodec == "av1" {
         Some("AV1")
     } else if vcodec.starts_with("avc") || vcodec.starts_with("h264") {
         Some("H.264")
@@ -175,6 +175,8 @@ fn codec_name(vcodec: &str) -> Option<&'static str> {
         Some("H.265")
     } else if vcodec.starts_with("vp8") {
         Some("VP8")
+    } else if vcodec == "mpeg4" {
+        Some("MPEG-4")
     } else {
         None
     }

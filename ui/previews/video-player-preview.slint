@@ -15,11 +15,17 @@ export component AppWindow inherits Window {
         AppState.player-texture = @image-url("mock-thumbnail.svg");
         AppState.player-position = 146;
         AppState.player-duration = 3726;
+        AppState.player-current-quality = "720p · AV1";
         AppState.player-subtitles = ["Off", "English [en] · uploaded", "English [en] · automatic", "German [de] · automatic"];
-        AppState.player-qualities = ["Best available", "2160p 60fps", "1080p 60fps", "720p 30fps"];
-        AppState.player-quality-details = ["Picked automatically by yt-dlp", "av01.0.12M.08 + opus · webm · https · 401 · SDR", "vp09.00.41.08 + opus · webm · https · 303 · SDR", "avc1.64001F + mp4a.40.2 · mp4 · https · 22 · unavailable"];
+        AppState.player-qualities = ["Use playback settings", "2160p 60fps", "1080p 60fps", "720p 30fps"];
+        AppState.player-quality-details = ["Preferred quality and codec", "av01.0.12M.08 + opus · webm · https · 401 · SDR", "vp09.00.41.08 + opus · webm · https · 303 · SDR", "avc1.64001F + mp4a.40.2 · mp4 · https · 22 · unavailable"];
     }
     VerticalLayout {
+        HorizontalLayout {
+            Button { text: "720p AV1"; clicked => { AppState.player-current-quality = "720p · AV1"; AppState.player-quality-index = 0; AppState.player-loading = false; } }
+            Button { text: "Codec fallback"; clicked => { AppState.player-current-quality = "720p · VP9"; AppState.player-quality-index = 0; AppState.player-loading = false; } }
+            Button { text: "Resolution fallback"; clicked => { AppState.player-current-quality = "480p · AV1"; AppState.player-quality-index = 0; AppState.player-loading = false; } }
+        }
         HorizontalLayout {
             Button { text: "Sync popover"; clicked => { AppState.sync-menu-open = true; player.focus(); } }
             Button { text: "Subtitles loading"; clicked => { AppState.player-subtitles-loading = !AppState.player-subtitles-loading; } }
@@ -30,8 +36,8 @@ export component AppWindow inherits Window {
         HorizontalLayout {
             Button { text: "Loading qualities"; clicked => { AppState.player-qualities-loading = !AppState.player-qualities-loading; } }
             Button { text: "Partial list"; clicked => { AppState.player-qualities-loading = false; AppState.player-quality-note = "Signed-in quality lookup failed; showing public options. Retry to refresh the list."; } }
-            Button { text: "Loading"; clicked => { AppState.player-error = ""; AppState.player-loading = true; } }
-            Button { text: "Playing"; clicked => { AppState.player-loading = false; AppState.player-buffering = false; AppState.player-error = ""; AppState.player-paused = false; AppState.player-ended = false; } }
+            Button { text: "Loading"; clicked => { AppState.player-error = ""; AppState.player-loading = true; AppState.player-current-quality = ""; } }
+            Button { text: "Playing"; clicked => { AppState.player-current-quality = "720p · AV1"; AppState.player-loading = false; AppState.player-buffering = false; AppState.player-error = ""; AppState.player-paused = false; AppState.player-ended = false; } }
         }
         HorizontalLayout {
             Button { text: "Buffering"; clicked => { AppState.player-loading = false; AppState.player-buffering = true; } }
@@ -42,9 +48,9 @@ export component AppWindow inherits Window {
         }
         player := VideoPlayer {
             select-subtitle(index) => { AppState.player-subtitle-index = index; AppState.player-subtitle-note = ""; }
-            select-quality(index) => { AppState.player-quality-index = index; }
+            select-quality(index) => { AppState.player-quality-index = index; AppState.player-current-quality = index == 1 ? "2160p · AV1" : index == 2 ? "1080p · VP9" : index == 3 ? "720p · H.264" : "720p · AV1"; }
             toggle => { AppState.player-paused = !AppState.player-paused; AppState.player-ended = false; }
-            retry => { AppState.player-error = ""; AppState.player-loading = true; }
+            retry => { AppState.player-error = ""; AppState.player-loading = true; AppState.player-current-quality = ""; }
             seek(value) => { AppState.player-position = value; }
             toggle-fullscreen => { AppState.player-fullscreen = !AppState.player-fullscreen; }
         }

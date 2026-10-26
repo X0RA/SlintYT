@@ -179,6 +179,8 @@ export global AppState {
     in-out property <[string]> player-qualities;
     in-out property <[string]> player-quality-details;
     in-out property <int> player-quality-index: 0;
+    // Actual decoded stream, independent of the automatic/manual selection mode.
+    in-out property <string> player-current-quality;
     in-out property <bool> player-qualities-loading: false;
     in-out property <string> player-quality-note;
     in-out property <[string]> player-subtitles: ["Off"];

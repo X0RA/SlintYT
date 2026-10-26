@@ -128,6 +128,9 @@ jobs:
           cache-bin: false
 
       - name: Build release binary
+        env:
+          # Lets the app compare itself with GitHub releases.
+          SLINTYT_VERSION: ${{ needs.version.outputs.version }}
         run: cargo build --release --locked
 
       - name: Stage Linux binary
@@ -181,6 +184,9 @@ jobs:
           cache-bin: false
 
       - name: Build release executable
+        env:
+          # Lets the app compare itself with GitHub releases.
+          SLINTYT_VERSION: ${{ needs.version.outputs.version }}
         run: cargo build --release --locked
 
       - name: Stage Windows executable
@@ -245,6 +251,9 @@ jobs:
           cache-bin: false
 
       - name: Build macOS release target
+        env:
+          # Lets the app compare itself with GitHub releases.
+          SLINTYT_VERSION: ${{ needs.version.outputs.version }}
         run: cargo build --release --locked --target aarch64-apple-darwin
 
       - name: Build macOS .icns from app icon

@@ -1,0 +1,38 @@
+import { Button, Palette } from "std-widgets.slint";
+import { AppUpdateSettings } from "../components/app-update-settings.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData } from "../state.slint";
+export component AppWindow inherits Window {
+    title: "app update settings preview";
+    preferred-width: 640px; preferred-height: 480px; min-width: 320px;
+    background: #0e0e10;
+    in-out property <string> version: "0.0.7";
+    in-out property <bool> supported: true;
+    in-out property <bool> busy;
+    in-out property <bool> failed;
+    in-out property <string> status: "SlintYT v0.0.8 is available.";
+    in-out property <string> latest: "v0.0.8";
+    in-out property <bool> installable: true;
+    in-out property <string> url: "https://github.com/X0RA/SlintYT/releases/tag/v0.0.8";
+    init => { Palette.color-scheme = ColorScheme.dark; }
+    VerticalLayout {
+        padding: 24px; spacing: 16px;
+        HorizontalLayout {
+            spacing: 6px;
+            Button { text: "Available"; clicked => { root.version = "0.0.7"; root.supported = true; root.busy = false; root.failed = false; root.latest = "v0.0.8"; root.installable = true; root.status = "SlintYT v0.0.8 is available."; root.url = "https://github.com/X0RA/SlintYT/releases/tag/v0.0.8"; } }
+            Button { text: "Not installer"; clicked => { root.supported = false; root.busy = false; root.failed = false; root.installable = false; root.status = "SlintYT v0.0.8 is available. This copy wasn't installed by the SlintYT installer, so update it the same way you installed it."; } }
+            Button { text: "Installing"; clicked => { root.busy = true; root.failed = false; root.installable = false; root.status = "Administrator access is needed to write /Applications."; } }
+            Button { text: "Installed"; clicked => { root.busy = false; root.failed = false; root.installable = false; root.status = "Installed v0.0.8. It will be used next time you open SlintYT."; } }
+            Button { text: "Denied"; clicked => { root.busy = false; root.failed = true; root.installable = true; root.status = "Permission was not granted, so SlintYT was not changed."; } }
+            Button { text: "Up to date"; clicked => { root.busy = false; root.failed = false; root.installable = false; root.latest = ""; root.url = ""; root.status = "SlintYT is up to date (v0.0.7)."; } }
+            Button { text: "Dev build"; clicked => { root.version = ""; root.busy = false; root.failed = false; root.installable = false; root.latest = ""; root.url = ""; root.status = "This development build doesn't check for updates."; } }
+        }
+        AppUpdateSettings {
+            version: root.version; supported: root.supported; busy: root.busy; error: root.failed;
+            status: root.status; latest: root.latest; installable: root.installable; url: root.url;
+            check-updates => { root.busy = true; root.failed = false; root.status = "Checking for updates…"; }
+            install-update => { root.busy = true; root.installable = false; root.status = "Downloading the v0.0.8 installer…"; }
+            open-release(url) => { root.status = "Opening " + url; }
+        }
+        Rectangle { vertical-stretch: 1; }
+    }
+}

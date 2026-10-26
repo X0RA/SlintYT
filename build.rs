@@ -1,5 +1,7 @@
 fn main() {
     println!("cargo:rerun-if-env-changed=SLINTYT_PREVIEW");
+    // Release builds read this through option_env! to check for updates.
+    println!("cargo:rerun-if-env-changed=SLINTYT_VERSION");
     let ui = match std::env::var("SLINTYT_PREVIEW") {
         Ok(name) => {
             assert!(
@@ -22,6 +24,7 @@ fn main() {
                     "library-row",
                     "settings",
                     "yt-dlp-settings",
+                    "app-update-settings",
                     "channel-header",
                     "video-details",
                     "pill-input",

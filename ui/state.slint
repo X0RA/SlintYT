@@ -129,6 +129,17 @@ export global AppState {
     in-out property <string> tools-status;
     in-out property <string> tools-versions;
     callback check-tool-updates();
+    // SlintYT's own updates, see src/updates.rs. app-version is empty in development builds.
+    in-out property <string> app-version;
+    in-out property <bool> update-supported: false;
+    in-out property <bool> update-busy: false;
+    in-out property <bool> update-error: false;
+    in-out property <string> update-status;
+    in-out property <string> update-latest;
+    in-out property <bool> update-installable: false;
+    in-out property <string> update-url;
+    callback check-app-update();
+    callback install-app-update();
     in-out property <bool> account-menu-open: false;
     in-out property <bool> player-sidebar-open: false;
     in-out property <string> toast;

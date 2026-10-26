@@ -32,6 +32,10 @@ tokio = { version = "1", features = ["rt-multi-thread", "process", "time", "sync
 secret-service = { version = "5.2", features = ["rt-tokio-crypto-rust"] }
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 
+[target.'cfg(unix)'.dependencies]
+# Stops the in-app updater's installer process group.
+libc = "0.2"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"
 

@@ -67,6 +67,7 @@ pub fn wire(app: &AppWindow) -> (tokio::runtime::Runtime, Arc<crate::player::Pla
     let (sender, receiver) = mpsc::unbounded_channel();
     #[cfg(target_os = "macos")]
     crate::macos_tools::wire(app, runtime.handle().clone());
+    crate::updates::wire(app, runtime.handle().clone());
     let player = crate::player::install(app, runtime.handle().clone());
     let generation = Arc::new(AtomicU64::new(0));
     let session_slot = Arc::new(std::sync::RwLock::new(None));

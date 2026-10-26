@@ -65,6 +65,7 @@ jobs:
         run: |
           bash -n scripts/install-linux.sh scripts/install-macos.sh
           shellcheck scripts/install-linux.sh scripts/install-macos.sh
+          python3 -m unittest discover -s scripts/tests -v
           desktop-file-validate scripts/installer/slintyt.desktop
           test -s ui/assets/appicon.png
           test -s ui/assets/appicon.svg

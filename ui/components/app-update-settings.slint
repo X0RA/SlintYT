@@ -1,0 +1,54 @@
+import { Theme } from "../theme.slint";
+import { ActionButton } from "action-button.slint";
+
+// SlintYT's own updates. The install button only appears when this copy was
+// installed by the official installer on Linux or macOS.
+export component AppUpdateSettings inherits Rectangle {
+    // Empty in development builds, which never check for updates.
+    in property <string> version;
+    // This copy was installed by the official installer and can update itself.
+    in property <bool> supported;
+    in property <bool> busy;
+    in property <bool> error;
+    in property <string> status;
+    in property <string> latest;
+    in property <bool> installable;
+    in property <string> url;
+    callback check-updates();
+    callback install-update();
+    callback open-release(string);
+    min-height: layout.preferred-height;
+    background: Theme.surface;
+    border-width: 1px; border-color: #1e1e23; border-radius: 14px;
+    layout := VerticalLayout {
+        padding: 18px; spacing: 14px;
+        version-label := Text { text: root.version == "" ? "Development build" : "SlintYT v" + root.version; color: Theme.text; font-size: 14px; wrap: word-wrap; }
+        // The status line already explains development builds.
+        if root.version != "" : Text {
+            text: root.supported
+                ? "SlintYT checks GitHub for a new release at startup. Updates use the official installer, which may ask for your password."
+                : "SlintYT checks GitHub for a new release at startup.";
+            color: Theme.subtle; font-size: 13px; wrap: word-wrap;
+        }
+        if root.status != "" : status-label := Text { text: root.status; color: root.error ? #ff9b9b : Theme.muted; font-size: 13px; wrap: word-wrap; }
+        HorizontalLayout {
+            spacing: 10px; alignment: start;
+            if root.installable && !root.busy : install-button := ActionButton {
+                text: "Install " + root.latest;
+                primary: true;
+                clicked => { root.install-update(); }
+            }
+            check-button := ActionButton {
+                text: root.busy ? "Please wait…" : "Check for updates";
+                enabled: !root.busy && root.version != "";
+                outlined: true;
+                clicked => { root.check-updates(); }
+            }
+            if root.url != "" : release-button := ActionButton {
+                text: "Release notes";
+                quiet: true;
+                clicked => { root.open-release(root.url); }
+            }
+        }
+    }
+}

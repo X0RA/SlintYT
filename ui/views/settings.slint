@@ -6,6 +6,7 @@ import { Choice } from "../components/choice.slint";
 import { PillInput } from "../components/pill-input.slint";
 import { AppState } from "../state.slint";
 import { YtDlpSettings } from "../components/yt-dlp-settings.slint";
+import { AppUpdateSettings } from "../components/app-update-settings.slint";
 component Switch inherits Rectangle {
     in property <string> label;
     in-out property <bool> checked: false;
@@ -79,9 +80,12 @@ export component SettingsPage inherits Rectangle {
     // Near the end the page cannot scroll a short section to the top, so keep the clicked one highlighted there.
     private property <int> picked: -1;
     private property <bool> at-end: sections.content-y <= -(sections.content-height - sections.visible-height) + 1px;
-    private property <int> section: root.at-end && root.picked >= 0 ? root.picked : root.scrolled >= about.y ? (AppState.managed-tools ? 9 : 8) : AppState.managed-tools && root.scrolled >= tools.y ? 8 : root.scrolled >= storage.y ? 7 : root.scrolled >= account.y ? 6 : root.scrolled >= bookmarks.y ? 5 : root.scrolled >= feed.y ? 4 : root.scrolled >= watch.y ? 3 : root.scrolled >= interface.y ? 2 : root.scrolled >= engine.y ? 1 : 0;
+    // Updates follows the optional yt-dlp section, and About comes last.
+    private property <int> updates-index: AppState.managed-tools ? 9 : 8;
+    private property <string> version-label: AppState.app-version == "" ? "development build" : AppState.app-version;
+    private property <int> section: root.at-end && root.picked >= 0 ? root.picked : root.scrolled >= about.y ? root.updates-index + 1 : root.scrolled >= updates.y ? root.updates-index : AppState.managed-tools && root.scrolled >= tools.y ? 8 : root.scrolled >= storage.y ? 7 : root.scrolled >= account.y ? 6 : root.scrolled >= bookmarks.y ? 5 : root.scrolled >= feed.y ? 4 : root.scrolled >= watch.y ? 3 : root.scrolled >= interface.y ? 2 : root.scrolled >= engine.y ? 1 : 0;
     function jump(index: int) {
-        let target = index == 0 ? playback.y : index == 1 ? engine.y : index == 2 ? interface.y : index == 3 ? watch.y : index == 4 ? feed.y : index == 5 ? bookmarks.y : index == 6 ? account.y : index == 7 ? storage.y : index == 8 && AppState.managed-tools ? tools.y : about.y;
+        let target = index == 0 ? playback.y : index == 1 ? engine.y : index == 2 ? interface.y : index == 3 ? watch.y : index == 4 ? feed.y : index == 5 ? bookmarks.y : index == 6 ? account.y : index == 7 ? storage.y : index == 8 && AppState.managed-tools ? tools.y : index == root.updates-index ? updates.y : about.y;
         root.picked = index;
         sections.content-y = -min(target, max(0px, sections.content-height - sections.visible-height));
     }
@@ -91,7 +95,7 @@ export component SettingsPage inherits Rectangle {
         HorizontalLayout {
         spacing: root.narrow ? 16px : 48px;
         VerticalLayout { width: root.narrow ? 120px : 180px; alignment: start; spacing: 2px;
-            for name[index] in AppState.managed-tools ? ["Playback", "Video engine", "Interface", "Watch status", "Feed", "Bookmarks", "Account", "Storage", "yt-dlp", "About"] : ["Playback", "Video engine", "Interface", "Watch status", "Feed", "Bookmarks", "Account", "Storage", "About"] : SectionLink {
+            for name[index] in AppState.managed-tools ? ["Playback", "Video engine", "Interface", "Watch status", "Feed", "Bookmarks", "Account", "Storage", "yt-dlp", "Updates", "About"] : ["Playback", "Video engine", "Interface", "Watch status", "Feed", "Bookmarks", "Account", "Storage", "Updates", "About"] : SectionLink {
                 text: name; active: root.section == index; clicked => { root.jump(index); }
             }
         }
@@ -153,8 +157,20 @@ export component SettingsPage inherits Rectangle {
                         check-updates => { AppState.check-tool-updates(); }
                     }
                 }
+                updates := VerticalLayout {
+                    spacing: 14px;
+                    Text { text: "Updates"; color: Theme.text; font-size: 15px; font-weight: 600; }
+                    app-update := AppUpdateSettings {
+                        version: AppState.app-version; supported: AppState.update-supported;
+                        busy: AppState.update-busy; error: AppState.update-error; status: AppState.update-status;
+                        latest: AppState.update-latest; installable: AppState.update-installable; url: AppState.update-url;
+                        check-updates => { AppState.check-app-update(); }
+                        install-update => { AppState.install-app-update(); }
+                        open-release(url) => { AppState.open-url(url); }
+                    }
+                }
                 about := SettingSection { title: "About"; help: "Version details for bug reports.";
-                    SettingRow { first: true; label: "SlintYT 0.1.0"; help: "Rust · Slint 1.18 · libmpv"; kind: 3; options: ["Copy debug info"]; action: "Copy debug info"; checked: false; activated => { AppState.clipboard-text = "SlintYT 0.1.0 · Rust · Slint 1.18 · libmpv"; AppState.clipboard-serial += 1; AppState.toast = "Debug info copied"; } }
+                    SettingRow { first: true; label: "SlintYT " + root.version-label; help: "Rust · Slint 1.18 · libmpv"; kind: 3; options: ["Copy debug info"]; action: "Copy debug info"; checked: false; activated => { AppState.clipboard-text = "SlintYT " + root.version-label + " · Rust · Slint 1.18 · libmpv"; AppState.clipboard-serial += 1; AppState.toast = "Debug info copied"; } }
                 }
             }
         }

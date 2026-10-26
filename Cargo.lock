@@ -5518,6 +5518,7 @@ dependencies = [
  "directories",
  "glow",
  "image",
+ "libc",
  "libmpv2",
  "libmpv2-sys",
  "pbkdf2",

@@ -1,3 +1,4 @@
+use crate::playback_settings::StreamSelection;
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use std::{collections::BTreeMap, ffi::OsStr, process::Stdio, time::Duration};
@@ -12,6 +13,9 @@ pub struct Media {
     pub(super) streams: Vec<String>,
     pub user_agent: String,
     pub referer: String,
+    /// yt-dlp's codec string for the video stream, empty when unknown.
+    #[serde(default)]
+    pub vcodec: String,
 }
 
 impl Media {
@@ -55,7 +59,8 @@ pub fn valid_id(id: &str) -> bool {
 }
 
 /// macOS uses app-private playback tools; other platforms use PATH.
-pub async fn resolve(id: &str, cookies: &str) -> Result<Media> {
+/// Selection combines resolution eligibility with codec and resolution ranking.
+pub async fn resolve(id: &str, cookies: &str, selection: &StreamSelection) -> Result<Media> {
     #[cfg(target_os = "macos")]
     {
         let tools = crate::macos_tools::installed_paths().await?;
@@ -64,11 +69,19 @@ pub async fn resolve(id: &str, cookies: &str) -> Result<Media> {
             id,
             cookies,
             Duration::from_secs(90),
+            selection,
         )
         .await;
     }
     #[cfg(not(target_os = "macos"))]
-    resolve_with(OsStr::new("yt-dlp"), id, cookies, Duration::from_secs(90)).await
+    resolve_with(
+        OsStr::new("yt-dlp"),
+        id,
+        cookies,
+        Duration::from_secs(90),
+        selection,
+    )
+    .await
 }
 
 async fn resolve_with(
@@ -76,6 +89,7 @@ async fn resolve_with(
     id: &str,
     cookies: &str,
     timeout: Duration,
+    selection: &StreamSelection,
 ) -> Result<Media> {
     if !valid_id(id) {
         bail!("This video has an invalid YouTube ID.");
@@ -85,10 +99,10 @@ async fn resolve_with(
     // Retain account access for videos that cannot be resolved anonymously.
     // Both attempts share one deadline; cancellation still kills the child.
     tokio::time::timeout(timeout, async {
-        match run(executable, id, "", timeout).await {
+        match run(executable, id, "", timeout, selection).await {
             Ok(media) => Ok(media),
             Err(error) if session_config(cookies)?.is_empty() => Err(error),
-            Err(_) => run(executable, id, cookies, timeout).await,
+            Err(_) => run(executable, id, cookies, timeout, selection).await,
         }
     })
     .await
@@ -162,8 +176,14 @@ pub(super) fn cookie_header(cookies: &str) -> Result<Zeroizing<String>> {
     ))
 }
 
-async fn run(executable: &OsStr, id: &str, cookies: &str, timeout: Duration) -> Result<Media> {
-    parse_media(&extract(executable, id, cookies, true, timeout).await?)
+async fn run(
+    executable: &OsStr,
+    id: &str,
+    cookies: &str,
+    timeout: Duration,
+    selection: &StreamSelection,
+) -> Result<Media> {
+    parse_media(&extract(executable, id, cookies, true, timeout, selection).await?)
 }
 
 pub(super) async fn catalogue_output(id: &str, cookies: &str) -> Result<Zeroizing<Vec<u8>>> {
@@ -173,7 +193,15 @@ pub(super) async fn catalogue_output(id: &str, cookies: &str) -> Result<Zeroizin
     let executable = tools.yt_dlp.as_os_str();
     #[cfg(not(target_os = "macos"))]
     let executable = OsStr::new("yt-dlp");
-    extract(executable, id, cookies, false, Duration::from_secs(90)).await
+    extract(
+        executable,
+        id,
+        cookies,
+        false,
+        Duration::from_secs(90),
+        &StreamSelection::default(),
+    )
+    .await
 }
 
 async fn extract(
@@ -182,6 +210,7 @@ async fn extract(
     cookies: &str,
     check: bool,
     timeout: Duration,
+    selection: &StreamSelection,
 ) -> Result<Zeroizing<Vec<u8>>> {
     if !valid_id(id) {
         bail!("This video has an invalid YouTube ID.");
@@ -198,6 +227,9 @@ async fn extract(
                 .arg("--js-runtimes")
                 .arg(format!("deno:{}", tools.deno.display()));
         }
+    }
+    if !selection.sort.is_empty() {
+        command.arg("--format-sort").arg(&selection.sort);
     }
     let mut child = command
         .args([
@@ -221,7 +253,7 @@ async fn extract(
             "--extractor-retries",
             "1",
             "--format",
-            "bestvideo+bestaudio/best",
+            &selection.format,
             "--dump-single-json",
             "--",
         ])
@@ -276,6 +308,8 @@ struct Format {
     url: String,
     #[serde(default)]
     http_headers: Headers,
+    #[serde(default)]
+    vcodec: Option<String>,
 }
 #[derive(Deserialize)]
 struct Info {
@@ -283,6 +317,8 @@ struct Info {
     requested_formats: Option<Vec<Format>>,
     #[serde(default)]
     http_headers: Headers,
+    #[serde(default)]
+    vcodec: Option<String>,
 }
 fn parse_media(output: &[u8]) -> Result<Media> {
     let info: Info = serde_json::from_slice(output)
@@ -293,10 +329,17 @@ fn parse_media(output: &[u8]) -> Result<Media> {
                 vec![Format {
                     url,
                     http_headers: Headers::default(),
+                    vcodec: info.vcodec.clone(),
                 }]
             })
             .unwrap_or_default()
     });
+    let vcodec = formats
+        .iter()
+        .filter_map(|f| f.vcodec.as_deref())
+        .find(|c| !c.is_empty() && *c != "none")
+        .unwrap_or_default()
+        .to_owned();
     let first = formats
         .first()
         .context("YouTube did not return playable streams.")?;
@@ -318,6 +361,7 @@ fn parse_media(output: &[u8]) -> Result<Media> {
         } else {
             referer
         },
+        vcodec,
     };
     media.source()?;
     Ok(media)
@@ -346,6 +390,11 @@ mod tests {
         assert_eq!(media.streams.len(), 2);
         assert_eq!(media.user_agent, "Example");
         assert!(!media.source().unwrap().contains("synthetic-secret"));
+        assert_eq!(media.vcodec, "");
+        let picked = br#"{"requested_formats":[{"url":"https://cdn.example/video","vcodec":"vp09.00.40.08"},{"url":"https://cdn.example/audio","vcodec":"none"}]}"#;
+        assert_eq!(parse_media(picked).unwrap().vcodec, "vp09.00.40.08");
+        let muxed = br#"{"url":"https://cdn.example/muxed","vcodec":"avc1.42001E"}"#;
+        assert_eq!(parse_media(muxed).unwrap().vcodec, "avc1.42001E");
         assert!(parse_media(br#"{"url":"file:///etc/passwd"}"#).is_err());
         assert!(
             parse_media(
@@ -395,7 +444,8 @@ printf '%s\n' '{"url":"https://cdn.example/video"}'
                 exe.as_os_str(),
                 "abcdefghijk",
                 cookies,
-                Duration::from_secs(3)
+                Duration::from_secs(3),
+                &StreamSelection::default()
             )
             .await
             .is_ok()
@@ -409,6 +459,7 @@ printf '%s\n' '{"url":"https://cdn.example/video"}'
             "abcdefghijk",
             cookies,
             Duration::from_secs(3),
+            &StreamSelection::default(),
         )
         .await;
         assert!(
@@ -424,6 +475,7 @@ printf '%s\n' '{"url":"https://cdn.example/video"}'
             "abcdefghijk",
             "",
             Duration::from_millis(100),
+            &StreamSelection::default(),
         )
         .await;
         assert!(result.err().unwrap().to_string().contains("timed out"));
@@ -432,7 +484,8 @@ printf '%s\n' '{"url":"https://cdn.example/video"}'
                 root.path().join("missing").as_os_str(),
                 "abcdefghijk",
                 "",
-                Duration::from_secs(3)
+                Duration::from_secs(3),
+                &StreamSelection::default()
             )
             .await
             .err()
@@ -464,6 +517,7 @@ printf '%s\n' '{"url":"https://cdn.example/public"}'
             "abcdefghijk",
             cookies,
             Duration::from_secs(3),
+            &StreamSelection::default(),
         )
         .await
         .unwrap();
@@ -487,6 +541,7 @@ printf '%s\n' '{"url":"https://cdn.example/account"}'
             "abcdefghijk",
             cookies,
             Duration::from_secs(3),
+            &StreamSelection::default(),
         )
         .await
         .unwrap();
@@ -506,9 +561,15 @@ exit 1
 "#,
         );
         assert!(
-            resolve_with(exe.as_os_str(), "abcdefghijk", "", Duration::from_secs(3))
-                .await
-                .is_err()
+            resolve_with(
+                exe.as_os_str(),
+                "abcdefghijk",
+                "",
+                Duration::from_secs(3),
+                &StreamSelection::default()
+            )
+            .await
+            .is_err()
         );
         assert_eq!(
             std::fs::read_to_string(exe.with_extension("attempts")).unwrap(),
@@ -520,6 +581,7 @@ exit 1
             "abcdefghijk",
             ".youtube.com\tTRUE\t/\tTRUE\t0\tSAPISID\tsynthetic-secret\n",
             Duration::from_millis(100),
+            &StreamSelection::default(),
         )
         .await
         .err()
@@ -543,7 +605,13 @@ exit 1
                 .expect("Native cookie import failed"),
         );
         let id = std::env::var("SLINTYT_TEST_VIDEO").unwrap_or_else(|_| "dQw4w9WgXcQ".into());
-        let media = resolve(&id, &cookies).await.expect("CLI lookup failed");
+        let media = resolve(
+            &id,
+            &cookies,
+            &crate::playback_settings::Preferences::default().selection(),
+        )
+        .await
+        .expect("CLI lookup failed");
         assert!(media.source().is_ok());
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(20))
@@ -590,6 +658,7 @@ exit 1
             ],
             user_agent: String::new(),
             referer: String::new(),
+            vcodec: String::new(),
         };
         assert_eq!(
             media.source().unwrap(),

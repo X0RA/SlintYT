@@ -88,6 +88,15 @@ export global AppState {
     pure callback channel-count([VideoData], string, bool) -> int;
     in-out property <int> scroll-reset: 0;
     in-out property <bool> settings-open: false;
+    in-out property <int> playback-quality: 0;
+    in-out property <int> playback-codec: 0;
+    in-out property <int> playback-speed: 0;
+    in-out property <int> playback-subtitles: 0;
+    in-out property <bool> playback-resume: true;
+    in-out property <bool> playback-autoplay: false;
+    in-out property <string> playback-settings-error;
+    // Fields 0–5 follow the six rows in Settings → Playback.
+    callback playback-setting-changed(int, int);
     callback open-data-folder();
     // Enabled only by the macOS tool manager (or standalone mock previews).
     in-out property <bool> managed-tools: false;

@@ -9,13 +9,15 @@ import { YtDlpSettings } from "../components/yt-dlp-settings.slint";
 component Switch inherits Rectangle {
     in property <string> label;
     in-out property <bool> checked: false;
+    callback toggled(bool);
+    function toggle() { root.checked = !root.checked; root.toggled(root.checked); }
     width: 52px; height: 44px;
-    accessible-role: checkbox; accessible-label: root.label; accessible-checked: root.checked; accessible-action-default => { root.checked = !root.checked; }
+    accessible-role: checkbox; accessible-label: root.label; accessible-checked: root.checked; accessible-action-default => { root.toggle(); }
     Rectangle { width: 40px; height: 24px; border-radius: 12px; background: root.checked ? Theme.accent : #2e2e35;
         animate background { duration: 150ms; }
         Rectangle { x: root.checked ? 19px : 3px; y: 3px; width: 18px; height: 18px; background: white; border-radius: 9px; animate x { duration: 150ms; } }
     }
-    TouchArea { mouse-cursor: pointer; clicked => { root.checked = !root.checked; } }
+    TouchArea { mouse-cursor: pointer; clicked => { root.toggle(); } }
 }
 // One setting: label and explanation on the left, a control on the right.
 // kind 0 = choice, 1 = switch, 2 = text field, 3 = action button.
@@ -28,6 +30,9 @@ component SettingRow inherits Rectangle {
     in property <bool> first: false;
     in-out property <bool> checked: false;
     in-out property <string> value;
+    in-out property <int> current-index: 0;
+    callback selected(int);
+    callback toggled(bool);
     callback activated();
     min-height: layout.preferred-height;
     if !root.first : Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: #1f1f24; }
@@ -38,8 +43,8 @@ component SettingRow inherits Rectangle {
             Text { text: root.label; color: Theme.text; font-size: 14px; font-weight: 500; }
             Text { text: root.help; color: Theme.subtle; font-size: 13px; wrap: word-wrap; }
         }
-        if root.kind == 0 : Choice { options: root.options; label: root.label; }
-        if root.kind == 1 : Switch { label: root.label; checked <=> root.checked; }
+        if root.kind == 0 : Choice { options: root.options; label: root.label; current-index <=> root.current-index; selected(index) => { root.selected(index); } }
+        if root.kind == 1 : Switch { label: root.label; checked <=> root.checked; toggled(value) => { root.toggled(value); } }
         if root.kind == 2 : PillInput { preferred-width: 280px; min-width: 140px; horizontal-stretch: 0; height: 40px; border-radius: 10px; placeholder: "deband=yes  video-sync=display-resample"; text <=> root.value; }
         if root.kind == 3 : ActionButton { height: 40px; text: root.action; outlined: true; clicked => { root.activated(); } }
     }
@@ -97,13 +102,14 @@ export component SettingsPage inherits Rectangle {
                 width: sections.visible-width;
                 spacing: 36px; padding-bottom: 48px; padding-right: 12px;
                 playback := SettingSection { title: "Playback"; help: "Which stream gets picked and how videos start.";
-                    SettingRow { first: true; label: "Preferred quality"; help: "Highest resolution to request. Falls back when a video does not offer it."; kind: 0; options: ["1080p", "Best available", "2160p", "1440p", "720p"]; action: ""; checked: false; }
-                    SettingRow { label: "Preferred codec"; help: "AV1 streams are smaller, but need a GPU that decodes AV1 smoothly."; kind: 0; options: ["VP9", "AV1", "H.264"]; action: ""; checked: false; }
-                    SettingRow { label: "Default speed"; help: "Applied to every new video."; kind: 0; options: ["1×", "0.75×", "1.25×", "1.5×", "2×"]; action: ""; checked: false; }
-                    SettingRow { label: "Subtitles"; help: "Load captions automatically when the video has them."; kind: 0; options: ["Off", "English", "Automatic"]; action: ""; checked: false; }
-                    SettingRow { label: "Resume where I left off"; help: "Start from your last position when progress is known."; kind: 1; options: []; action: ""; checked: true; }
-                    SettingRow { label: "Autoplay next"; help: "Play the next video in a playlist automatically."; kind: 1; options: []; action: ""; checked: false; }
+                    playback-quality-row := SettingRow { first: true; label: "Preferred quality"; help: "Highest resolution to request. Falls back when a video does not offer it."; kind: 0; options: ["1080p", "Best available", "2160p", "1440p", "720p"]; action: ""; checked: false; current-index <=> AppState.playback-quality; selected(index) => { AppState.playback-setting-changed(0, index); } }
+                    playback-codec-row := SettingRow { label: "Preferred codec"; help: "AV1 streams are smaller, but need a GPU that decodes AV1 smoothly."; kind: 0; options: ["VP9", "AV1", "H.264"]; action: ""; checked: false; current-index <=> AppState.playback-codec; selected(index) => { AppState.playback-setting-changed(1, index); } }
+                    playback-speed-row := SettingRow { label: "Default speed"; help: "Applied to every new video."; kind: 0; options: ["1×", "0.75×", "1.25×", "1.5×", "2×"]; action: ""; checked: false; current-index <=> AppState.playback-speed; selected(index) => { AppState.playback-setting-changed(2, index); } }
+                    playback-subtitles-row := SettingRow { label: "Subtitles"; help: "Load captions automatically when the video has them."; kind: 0; options: ["Off", "English", "Automatic"]; action: ""; checked: false; current-index <=> AppState.playback-subtitles; selected(index) => { AppState.playback-setting-changed(3, index); } }
+                    playback-resume-row := SettingRow { label: "Resume where I left off"; help: "Start from your last position when progress is known."; kind: 1; options: []; action: ""; checked <=> AppState.playback-resume; toggled(value) => { AppState.playback-setting-changed(4, value ? 1 : 0); } }
+                    playback-autoplay-row := SettingRow { label: "Autoplay next"; help: "Play the next video in a playlist automatically."; kind: 1; options: []; action: ""; checked <=> AppState.playback-autoplay; toggled(value) => { AppState.playback-setting-changed(5, value ? 1 : 0); } }
                 }
+                if AppState.playback-settings-error != "" : Text { text: AppState.playback-settings-error; color: Theme.accent; wrap: word-wrap; }
                 engine := SettingSection { title: "Video engine"; help: "libmpv decodes and renders into the app’s OpenGL surface.";
                     SettingRow { first: true; label: "Hardware decoding"; help: "Sets mpv’s hwdec. Auto-safe picks a backend known to work."; kind: 0; options: ["auto-safe", "vaapi", "nvdec", "vulkan", "no"]; action: ""; checked: false; }
                     SettingRow { label: "Stream buffer"; help: "How much video mpv reads ahead. Larger buffers help with bad connections."; kind: 0; options: ["Normal · 150 MB", "Small · 50 MB", "Large · 500 MB"]; action: ""; checked: false; }

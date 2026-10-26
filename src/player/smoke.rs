@@ -134,6 +134,9 @@ fn native_video_playback_controls_resize_and_close() {
     state.set_player_loading(true);
     state.set_player_title("Local GPU playback check".into());
     let stage = Rc::new(Cell::new(0));
+    let next_calls = Rc::new(Cell::new(0));
+    let next_count = next_calls.clone();
+    state.on_player_next(move || next_count.set(next_count.get() + 1));
     let checkpoint = Rc::new(Cell::new(Instant::now()));
     let expected_texture = Rc::new(Cell::new((0u32, 0u32)));
     let started = Instant::now();
@@ -193,6 +196,7 @@ fn native_video_playback_controls_resize_and_close() {
                                 referer: String::new(),
                                 position: 0.,
                                 tracking: None,
+                                speed: 1.5,
                                 paused: false,
                             })
                             .unwrap();
@@ -207,6 +211,8 @@ fn native_video_playback_controls_resize_and_close() {
                 {
                     assert!(commands::AUDIO_CHANNELS.load(Ordering::Acquire) > 0);
                     if !online {
+                        assert_eq!(engine.get_property::<f64>("speed").unwrap(), 1.5);
+                        state.invoke_player_set_speed(2.);
                         *player.subtitle_choices.write().unwrap() = vec![subtitles::Track {
                             key: "uploaded:en".into(),
                             label: "English [en] · uploaded".into(),
@@ -237,6 +243,7 @@ fn native_video_playback_controls_resize_and_close() {
                     && !state.get_player_subtitles_loading() =>
                 {
                     if !online {
+                        assert_eq!(engine.get_property::<f64>("speed").unwrap(), 2.);
                         assert_eq!(state.get_player_subtitle_index(), 1);
                         assert!(
                             engine
@@ -340,16 +347,56 @@ fn native_video_playback_controls_resize_and_close() {
                             referer: String::new(),
                             position: 0.,
                             tracking: None,
+                            speed: 1.,
                             paused: false,
                         })
                         .unwrap();
                     stage.set(6);
                 }
                 6 if !state.get_player_loading() && state.get_player_position() > 0.3 => {
+                    assert_eq!(engine.get_property::<f64>("speed").unwrap(), 1.);
                     assert!(state.get_player_error().is_empty());
                     assert!(!state.get_player_ended());
                     assert!(state.get_player_position() < 5.);
+                    state.set_player_playlist_index(0);
+                    state.set_playback_autoplay(false);
+                    commands::publish(
+                        &app.as_weak(),
+                        player.epoch.clone(),
+                        player.epoch.load(Ordering::Acquire),
+                        commands::Update::Ended(true),
+                    );
                     stage.set(7);
+                }
+                7 if state.get_player_ended() => {
+                    assert_eq!(next_calls.get(), 0, "Autoplay off must stop at EOF");
+                    state.set_player_ended(false);
+                    state.set_playback_autoplay(true);
+                    for _ in 0..2 {
+                        commands::publish(
+                            &app.as_weak(),
+                            player.epoch.clone(),
+                            player.epoch.load(Ordering::Acquire),
+                            commands::Update::Ended(true),
+                        );
+                    }
+                    stage.set(8);
+                }
+                8 if state.get_player_ended() => {
+                    assert_eq!(next_calls.get(), 1, "Repeated EOF must advance only once");
+                    state.set_player_ended(false);
+                    state.set_player_playlist_index(-1);
+                    commands::publish(
+                        &app.as_weak(),
+                        player.epoch.clone(),
+                        player.epoch.load(Ordering::Acquire),
+                        commands::Update::Ended(true),
+                    );
+                    stage.set(9);
+                }
+                9 if state.get_player_ended() => {
+                    assert_eq!(next_calls.get(), 1, "Autoplay only advances playlists");
+                    stage.set(10);
                     // Exercise render-context teardown while video is active.
                     app.hide().unwrap();
                     slint::quit_event_loop().unwrap();
@@ -396,7 +443,7 @@ fn native_video_playback_controls_resize_and_close() {
     });
     assert_eq!(
         stage.get(),
-        7,
+        10,
         "native player stalled: {}",
         app.global::<AppState>().get_player_error()
     );

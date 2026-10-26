@@ -29,6 +29,8 @@ pub struct SavedProfile {
 #[derive(Default, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
+    pub playback: crate::playback_settings::Preferences,
+    #[serde(default)]
     pub bookmarks_enabled: bool,
     /// `browser` was the sole field before saved profiles were introduced.
     #[serde(default, alias = "browser")]
@@ -80,6 +82,7 @@ impl Store {
                 let mut settings: Settings = serde_json::from_slice(&data).context(
                     "Saved browser settings are invalid. Please choose your browser again.",
                 )?;
+                settings.playback.normalize();
                 if let Some(current) = settings.current_profile.clone()
                     && !settings.profiles.iter().any(|p| p.selection == current)
                 {
@@ -121,6 +124,14 @@ impl Store {
         self.write(&settings)
     }
 
+    pub fn save_playback(&self, playback: &crate::playback_settings::Preferences) -> Result<()> {
+        let _guard = SETTINGS_WRITE.lock().unwrap();
+        let mut settings = self.load_settings()?;
+        settings.playback = playback.clone();
+        settings.playback.normalize();
+        self.write(&settings)
+    }
+
     fn write(&self, settings: &Settings) -> Result<()> {
         fs::create_dir_all(&self.root).context("Could not create the SlintYT config folder.")?;
         let mut options = OpenOptions::new();
@@ -145,6 +156,55 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn playback_defaults_migrate_and_preferences_survive_other_settings_writes() {
+        use crate::playback_settings::{Codec, Preferences, Subtitles};
+        let root = tempfile::tempdir().unwrap();
+        let store = Store {
+            root: root.path().into(),
+        };
+        fs::write(
+            store.root.join("settings.json"),
+            "{\"bookmarks_enabled\":true}",
+        )
+        .unwrap();
+        assert_eq!(
+            store.load_settings().unwrap().playback,
+            Preferences::default()
+        );
+        let preferences = Preferences {
+            max_height: None,
+            codec: Codec::H264,
+            speed: 1.5,
+            subtitles: Subtitles::English,
+            resume: false,
+            autoplay: true,
+        };
+        store.save_playback(&preferences).unwrap();
+        assert!(store.load_settings().unwrap().bookmarks_enabled);
+        store
+            .save(&Selection {
+                browser: "firefox".into(),
+                profile: root.path().join("profile"),
+                keyring: None,
+            })
+            .unwrap();
+        store.save_bookmarks_enabled(false).unwrap();
+        assert_eq!(store.load_settings().unwrap().playback, preferences);
+        let invalid = Preferences {
+            max_height: Some(9999),
+            speed: -1.,
+            ..preferences
+        };
+        store.save_playback(&invalid).unwrap();
+        let saved = store.load_settings().unwrap();
+        assert_eq!(saved.playback.max_height, Some(1080));
+        assert_eq!(saved.playback.speed, 1.);
+        assert_eq!(saved.profiles.len(), 1);
+        assert!(!saved.playback.resume);
+        assert!(saved.playback.autoplay);
+    }
 
     #[test]
     fn account_metadata_survives_switches_without_changing_current_selection() {

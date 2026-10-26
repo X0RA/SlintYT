@@ -22,6 +22,8 @@ use std::sync::{
 use tokio::{runtime::Handle, task::JoinHandle};
 
 pub struct Playback {
+    preferences: Arc<RwLock<crate::playback_settings::Preferences>>,
+    automatic_selection: Mutex<crate::playback_settings::StreamSelection>,
     engine: Option<Arc<Mpv>>,
     progress: RwLock<Option<Arc<progress::Client>>>,
     report_tasks: progress::Tasks,
@@ -43,6 +45,7 @@ pub struct Playback {
 
 #[derive(Default)]
 struct Start {
+    new_video: bool,
     quality: Option<String>,
     subtitle: Option<String>,
     position: f32,
@@ -104,8 +107,8 @@ fn show_qualities(app: &AppWindow, owner: &Playback, catalogue: quality::Catalog
         .map_or(0, |i| i as i32 + 1);
     // Labels read "1080p 60fps · codecs · ext · protocol · id"; the menu shows
     // the resolution as the title and everything after it as the detail line.
-    let mut labels = vec![slint::SharedString::from("Best available")];
-    let mut details = vec![slint::SharedString::from("Picked automatically by yt-dlp")];
+    let mut labels = vec![slint::SharedString::from("Use playback settings")];
+    let mut details = vec![slint::SharedString::from("Preferred quality and codec")];
     for option in &catalogue.options {
         let (title, detail) = option
             .label
@@ -278,6 +281,7 @@ impl Playback {
             id.clone(),
             title,
             Start {
+                new_video: true,
                 restore: true,
                 ..Default::default()
             },
@@ -288,6 +292,18 @@ impl Playback {
     fn load(self: &Arc<Self>, app: &AppWindow, id: String, title: String, start: Start) {
         self.cancel();
         let state = app.global::<AppState>();
+        let preferences = self.preferences.read().unwrap().clone();
+        let restore = start.restore && preferences.resume;
+        let speed = if start.new_video {
+            preferences.speed
+        } else {
+            state.get_player_speed()
+        };
+        if start.new_video {
+            *self.automatic_selection.lock().unwrap() = preferences.selection();
+        }
+        let selection = self.automatic_selection.lock().unwrap().clone();
+        state.set_player_speed(speed);
         state.set_player_open(true);
         state.set_player_title(title.clone().into());
         state.set_player_error("".into());
@@ -317,7 +333,7 @@ impl Playback {
         } else {
             self.choices.write().unwrap().clear();
             state.set_player_qualities(slint::ModelRc::new(slint::VecModel::from(vec![
-                slint::SharedString::from("Best available"),
+                slint::SharedString::from("Use playback settings"),
             ])));
             state.set_player_quality_details(slint::ModelRc::new(slint::VecModel::from(vec![
                 slint::SharedString::from("Loading the format list…"),
@@ -345,16 +361,17 @@ impl Playback {
         let owner = Arc::downgrade(self);
         let cache = self.cache.clone();
         let generation = cache.lock().unwrap().generation;
+        let selection_key = selection.cache_key();
         let progress_client = self.progress.read().unwrap().clone();
         *self.task.lock().unwrap() = Some(self.runtime.spawn(async move {
             let metadata = async {
                 match &progress_client {
-                    Some(client) => client.info(&id, start.restore).await.ok(),
+                    Some(client) => client.info(&id, restore).await.ok(),
                     None => None,
                 }
             };
             let streams = async {
-            let cached = cache.lock().unwrap().automatic(&id);
+            let cached = cache.lock().unwrap().automatic(&id, &selection_key);
             if let Some(key) = &start.quality {
                 let cached_catalogue = cache.lock().unwrap().catalogue(&id);
                 let catalogue = match cached_catalogue {
@@ -371,14 +388,21 @@ impl Playback {
             } else if let Some(media) = cached {
                 Ok(media)
             } else {
-                let media = resolve::resolve(&id, &cookies).await;
-                if let Ok(media) = &media { cache.lock().unwrap().store(generation, &id, Some(media.clone()), None); }
+                let media = resolve::resolve(&id, &cookies, &selection).await;
+                if let Ok(media) = &media { cache.lock().unwrap().store(generation, &id, Some((selection_key.clone(), media.clone())), None); }
                 media
             }
             };
             let (result, info) = tokio::join!(streams, metadata);
-            let position = if start.restore { info.as_ref().and_then(|info| info.resume).unwrap_or(0.) as f32 } else { start.position };
+            let position = if restore { info.as_ref().and_then(|info| info.resume).unwrap_or(0.) as f32 } else { start.position };
             let tracking = progress_client.zip(info).map(Box::new);
+            // Only automatic picks for a new video report a codec fallback.
+            let codec_notice = match &result {
+                Ok(media) if start.new_video && start.quality.is_none() => {
+                    preferences.codec_fallback(&media.vcodec)
+                }
+                _ => None,
+            };
             // Loading before RenderingSetup can make mpv reject its video output.
             for _ in 0..100 {
                 if ready.load(Ordering::Acquire) {
@@ -417,11 +441,14 @@ impl Playback {
                                     position: f64::from(position),
                                     tracking,
                                     paused: start.paused,
+                                    speed,
                                 })
                                 .map_err(|_| anyhow::anyhow!("Playback worker stopped"))
                         });
                         if loaded.is_err() {
                             fail(&app, "Could not start this video. Please retry.");
+                        } else if let Some(notice) = codec_notice {
+                            app.global::<AppState>().set_toast(notice.into());
                         }
                     }
                     Err(error) => fail(&app, &error.to_string()),
@@ -442,7 +469,10 @@ impl Playback {
                     Ok(catalogue) => {
                         let tracks = catalogue.subtitles.clone();
                         show_qualities(&app, &owner, catalogue);
-                        show_subtitles(&app, &owner, tracks, start.subtitle.as_deref(), epoch);
+                        let selected = if start.new_video {
+                            subtitles::preferred(&tracks, preferences.subtitles).map(|t| t.key.clone())
+                        } else { start.subtitle };
+                        show_subtitles(&app, &owner, tracks, selected.as_deref(), epoch);
                     }
                     Err(error) => {
                         app.global::<AppState>().set_player_subtitles_loading(false);
@@ -493,6 +523,10 @@ pub fn install(app: &AppWindow, runtime: Handle) -> Arc<Playback> {
         )
     });
     let player = Arc::new(Playback {
+        preferences: crate::playback_settings::wire(app),
+        automatic_selection: Mutex::new(
+            crate::playback_settings::Preferences::default().selection(),
+        ),
         engine,
         progress: RwLock::new(None),
         report_tasks,
@@ -619,6 +653,7 @@ pub fn install(app: &AppWindow, runtime: Handle) -> Arc<Playback> {
                     row.id.to_string(),
                     row.title.to_string(),
                     Start {
+                        new_video: true,
                         position: row.position,
                         ..Default::default()
                     },
@@ -699,6 +734,7 @@ pub fn install(app: &AppWindow, runtime: Handle) -> Arc<Playback> {
                 id,
                 title,
                 Start {
+                    new_video: false,
                     quality,
                     subtitle: selected_subtitle(&app, &owner),
                     position: state.get_player_position(),
@@ -733,6 +769,7 @@ pub fn install(app: &AppWindow, runtime: Handle) -> Arc<Playback> {
             id,
             title,
             Start {
+                new_video: false,
                 quality,
                 subtitle: selected_subtitle(&app, &owner),
                 position: state.get_player_position(),

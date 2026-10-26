@@ -155,6 +155,8 @@ fn parse(bytes: &[u8]) -> Result<Catalogue> {
                 } else {
                     referer.clone()
                 },
+                // Manual picks never show a codec fallback notice.
+                vcodec: String::new(),
             };
             if media.source().is_ok() {
                 Some(media)
@@ -235,7 +237,7 @@ const CAPACITY: usize = 8;
 struct Entry {
     id: String,
     created: Instant,
-    automatic: Option<Media>,
+    automatic: Option<(String, Media)>,
     catalogue: Option<Catalogue>,
 }
 
@@ -289,12 +291,12 @@ impl Cache {
             .iter()
             .find(|e| e.id == id && e.created.elapsed() < TTL)
     }
-    pub fn automatic(&self, id: &str) -> Option<Media> {
+    pub fn automatic(&self, id: &str, format: &str) -> Option<Media> {
         self.get(id)?
             .automatic
             .as_ref()
-            .filter(|media| fresh(media))
-            .cloned()
+            .filter(|(saved_format, media)| saved_format == format && fresh(media))
+            .map(|(_, media)| media.clone())
     }
     pub fn catalogue(&self, id: &str) -> Option<Catalogue> {
         self.get(id)?
@@ -313,7 +315,7 @@ impl Cache {
         &mut self,
         generation: u64,
         id: &str,
-        automatic: Option<Media>,
+        automatic: Option<(String, Media)>,
         catalogue: Option<Catalogue>,
     ) {
         if generation != self.generation {
@@ -349,6 +351,7 @@ mod tests {
             streams: vec![url.into()],
             user_agent: String::new(),
             referer: String::new(),
+            vcodec: String::new(),
         }
     }
     #[test]
@@ -384,34 +387,41 @@ mod tests {
             cache.store(
                 0,
                 &i.to_string(),
-                Some(media("https://cdn.example/video")),
+                Some(("default".into(), media("https://cdn.example/video"))),
                 None,
             );
         }
         assert_eq!(cache.entries.len(), CAPACITY);
-        assert!(cache.automatic("0").is_none());
+        assert!(cache.automatic("9", "default").is_some());
+        assert!(cache.automatic("9", "changed quality or codec").is_none());
+        assert!(cache.automatic("0", "default").is_none());
         cache.entries.back_mut().unwrap().created = Instant::now() - TTL;
-        assert!(cache.automatic("9").is_none());
+        assert!(cache.automatic("9", "default").is_none());
         assert!(!fresh(&media("https://cdn.example/video?expire=1")));
         assert!(!fresh(&media("https://cdn.example/expire/1/video")));
         cache.clear();
-        cache.store(0, "old", Some(media("https://cdn.example/video")), None);
+        cache.store(
+            0,
+            "old",
+            Some(("default".into(), media("https://cdn.example/video"))),
+            None,
+        );
         assert!(cache.entries.is_empty());
         let generation = cache.generation;
         cache.store(
             generation,
             "refresh",
-            Some(media("https://cdn.example/video")),
+            Some(("default".into(), media("https://cdn.example/video"))),
             None,
         );
         cache.invalidate("refresh");
         cache.store(
             generation,
             "refresh",
-            Some(media("https://cdn.example/stale")),
+            Some(("default".into(), media("https://cdn.example/stale"))),
             None,
         );
-        assert!(cache.automatic("refresh").is_none());
+        assert!(cache.automatic("refresh", "default").is_none());
     }
 
     #[test]

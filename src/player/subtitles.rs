@@ -78,6 +78,37 @@ pub fn tracks(info: &Info) -> Vec<Track> {
     tracks
 }
 
+pub fn preferred(
+    tracks: &[Track],
+    preference: crate::playback_settings::Subtitles,
+) -> Option<&Track> {
+    use crate::playback_settings::Subtitles;
+    let uploaded = |t: &&Track| t.key.starts_with("uploaded:");
+    let original = |t: &&Track| t.language.ends_with("-orig");
+    match preference {
+        Subtitles::Off => None,
+        Subtitles::English => tracks
+            .iter()
+            .filter(|t| t.language == "en" || t.language.starts_with("en-"))
+            .min_by_key(|t| (!uploaded(t), !original(t))),
+        Subtitles::Automatic => {
+            // yt-dlp marks the source language of generated captions with -orig.
+            // Prefer human captions in that language before generated captions.
+            let source = tracks.iter().find(original);
+            source
+                .and_then(|source| {
+                    let language = source.language.trim_end_matches("-orig");
+                    tracks
+                        .iter()
+                        .find(|t| uploaded(t) && t.language == language)
+                })
+                .or(source)
+                .or_else(|| tracks.iter().find(uploaded))
+                .or_else(|| tracks.first())
+        }
+    }
+}
+
 /// Download before handing the track to mpv so its command worker remains responsive.
 pub async fn prepare(track: Track, cookies: &str) -> anyhow::Result<Track> {
     #[cfg(test)]
@@ -144,6 +175,50 @@ pub fn select(engine: &Mpv, track: Option<&Track>) -> libmpv2::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn subtitle_defaults_handle_original_language_english_and_missing_tracks() {
+        use crate::playback_settings::Subtitles;
+        let info: Info = serde_json::from_value(serde_json::json!({
+            "subtitles": {
+                "de": [{"ext":"vtt", "url":"https://www.youtube.com/api/timedtext?lang=de"}],
+                "en-GB": [{"ext":"vtt", "url":"https://www.youtube.com/api/timedtext?lang=en-GB"}],
+                "fr": [{"ext":"vtt", "url":"https://www.youtube.com/api/timedtext?lang=fr"}]
+            },
+            "automatic_captions": {
+                "en": [{"ext":"vtt", "url":"https://www.youtube.com/api/timedtext?tlang=en"}],
+                "fr-orig": [{"ext":"vtt", "url":"https://www.youtube.com/api/timedtext?lang=fr"}]
+            }
+        }))
+        .unwrap();
+        let mut tracks = tracks(&info);
+        assert!(preferred(&tracks, Subtitles::Off).is_none());
+        assert_eq!(
+            preferred(&tracks, Subtitles::English).unwrap().key,
+            "uploaded:en-GB"
+        );
+        assert_eq!(
+            preferred(&tracks, Subtitles::Automatic).unwrap().key,
+            "uploaded:fr"
+        );
+        tracks.retain(|t| t.key != "uploaded:fr");
+        assert_eq!(
+            preferred(&tracks, Subtitles::Automatic).unwrap().key,
+            "automatic:fr-orig"
+        );
+        tracks.retain(|t| !t.key.starts_with("uploaded:"));
+        assert_eq!(
+            preferred(&tracks, Subtitles::English).unwrap().key,
+            "automatic:en"
+        );
+        assert_eq!(
+            preferred(&tracks, Subtitles::Automatic).unwrap().key,
+            "automatic:fr-orig"
+        );
+        tracks.retain(|t| !t.language.starts_with("en"));
+        assert!(preferred(&tracks, Subtitles::English).is_none());
+        assert!(preferred(&[], Subtitles::Automatic).is_none());
+    }
 
     #[test]
     fn captions_keep_languages_and_kinds_and_choose_playable_formats() {

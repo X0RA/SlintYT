@@ -25,6 +25,7 @@ pub enum Command {
         referer: String,
         position: f64,
         paused: bool,
+        speed: f32,
         tracking: Option<Box<(Arc<super::progress::Client>, super::progress::Info)>>,
     },
     Toggle(u64, bool),
@@ -147,8 +148,12 @@ pub(super) fn publish(
             Update::Volume(v) if v.is_finite() => state.set_player_volume(v as f32),
             Update::Buffering(v) => state.set_player_buffering(v),
             Update::Ended(v) => {
+                let was_ended = state.get_player_ended();
                 state.set_player_ended(v);
-                if v && state.get_player_playlist_index() >= 0 {
+                if v && !was_ended
+                    && state.get_playback_autoplay()
+                    && state.get_player_playlist_index() >= 0
+                {
                     state.invoke_player_next();
                 }
             }
@@ -296,6 +301,7 @@ pub fn start(
                             referer,
                             position,
                             paused,
+                            speed,
                             tracking,
                             ..
                         } => {
@@ -314,6 +320,7 @@ pub fn start(
                                 engine
                                     .set_property("start", position.max(0.).to_string().as_str())?;
                                 engine.set_property("pause", paused)?;
+                                engine.set_property("speed", f64::from(speed))?;
                                 engine.set_property("sid", "no")?;
                                 let client = observer(&engine)?;
                                 #[cfg(test)]

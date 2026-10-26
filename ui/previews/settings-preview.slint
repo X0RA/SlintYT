@@ -6,6 +6,12 @@ export component AppWindow inherits Window {
     in-out property <string> folder-action;
     title: "settings preview"; preferred-width: 1100px; height: 760px; min-width: 480px; background: #0e0e10;
     init => {
+        AppState.playback-quality = 3;
+        AppState.playback-codec = 1;
+        AppState.playback-speed = 3;
+        AppState.playback-subtitles = 1;
+        AppState.playback-resume = false;
+        AppState.playback-autoplay = true;
         AppState.bookmarks-enabled = true;
         AppState.connected = true;
         AppState.bookmark-destination-label = "slintyt-bookmarks · PRIVATE";

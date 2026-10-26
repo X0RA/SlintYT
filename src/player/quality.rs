@@ -1,6 +1,6 @@
 //! Account-scoped, bounded, memory-only stream catalogues. Signed URLs never
 //! enter UI models, logs, or the on-disk watch-history cache.
-use super::resolve::{self, Media};
+use super::resolve::Media;
 use super::subtitles;
 use anyhow::{Result, bail};
 use serde::Deserialize;
@@ -84,7 +84,7 @@ struct Info {
     captions: subtitles::Info,
 }
 
-fn parse(bytes: &[u8]) -> Result<Catalogue> {
+pub(super) fn parse(bytes: &[u8]) -> Result<Catalogue> {
     let info: Info = serde_json::from_slice(bytes)
         .map_err(|_| anyhow::anyhow!("Could not read the video quality list."))?;
     // yt-dlp sorts formats by preference, with the best last. Pair video-only
@@ -184,51 +184,18 @@ fn parse(bytes: &[u8]) -> Result<Catalogue> {
     })
 }
 
-pub async fn load(id: &str, cookies: &str) -> Result<Catalogue> {
-    // Keep all video formats, including different codecs/frame rates and
-    // signed-in-only choices. Do not use --check-all-formats: it would download
-    // test fragments for every entry just to display the menu.
-    let (public, account) = tokio::join!(
-        resolve::catalogue_output(id, ""),
-        resolve::catalogue_output(id, cookies),
-    );
-    merge(
-        public.and_then(|v| parse(&v)),
-        account.and_then(|v| parse(&v)),
-    )
-}
-
-fn merge(public: Result<Catalogue>, account: Result<Catalogue>) -> Result<Catalogue> {
-    match (public, account) {
-        (Ok(mut public), Ok(account)) => {
-            for track in account.subtitles {
-                if !public.subtitles.iter().any(|t| t.key == track.key) {
-                    public.subtitles.push(track);
-                }
-            }
-            for entry in account.options {
-                if let Some(existing) = public.options.iter_mut().find(|v| v.key == entry.key) {
-                    // Prefer public URLs for duplicate formats: the signed-in
-                    // equivalent may be rejected by YouTube's CDN (HTTP 403).
-                    if existing.media.is_none() && entry.media.is_some() {
-                        *existing = entry;
-                    }
-                } else {
-                    public.options.push(entry);
-                }
-            }
-            Ok(public)
-        }
-        (Ok(mut catalogue), Err(_)) => {
-            catalogue.note = "Signed-in quality lookup failed; showing public options. Retry to refresh the list.".into();
-            Ok(catalogue)
-        }
-        (Err(_), Ok(mut catalogue)) => {
-            catalogue.note = "Public quality lookup failed; showing signed-in options. Retry to refresh the list.".into();
-            Ok(catalogue)
-        }
-        (Err(error), Err(_)) => Err(error),
+/// Preserve a muxed format's audio; pair only video-only choices. Keep the
+/// explicit format ID in both branches so recovery cannot silently change it.
+pub(super) fn manual_selection(key: &str) -> Option<String> {
+    let id = key.split('|').next()?;
+    if id.is_empty()
+        || !id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+    {
+        return None;
     }
+    Some(format!("{id}[acodec!=none]/{id}+bestaudio/{id}"))
 }
 
 const TTL: Duration = Duration::from_secs(300);
@@ -355,6 +322,41 @@ mod tests {
         }
     }
     #[test]
+    #[ignore = "requires yt-dlp on PATH; local format fixture only"]
+    fn manual_selection_keeps_muxed_audio_and_pairs_video_only_formats() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("formats.json");
+        std::fs::write(&path, br#"{"id":"abcdefghijk","title":"Manual formats","extractor":"youtube","webpage_url":"https://www.youtube.com/watch?v=abcdefghijk","formats":[
+            {"format_id":"audio","url":"https://example.invalid/a","vcodec":"none","acodec":"aac","ext":"m4a"},
+            {"format_id":"18","url":"https://example.invalid/m","vcodec":"avc1","acodec":"aac","ext":"mp4"},
+            {"format_id":"137","url":"https://example.invalid/v","vcodec":"avc1","acodec":"none","ext":"mp4"}
+        ]}"#).unwrap();
+        for (id, expected) in [("18", "18"), ("137", "137+audio")] {
+            let output = std::process::Command::new("yt-dlp")
+                .args([
+                    "--ignore-config",
+                    "--no-plugin-dirs",
+                    "--simulate",
+                    "--no-check-formats",
+                    "--print",
+                    "format_id",
+                    "--format",
+                    &manual_selection(id).unwrap(),
+                    "--load-info-json",
+                ])
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), expected);
+        }
+    }
+
+    #[test]
     fn all_video_qualities_are_kept_and_audio_is_paired() {
         let catalogue = parse(br#"{"formats":[
           {"format_id":"sb","vcodec":"images","acodec":"none"},
@@ -377,8 +379,6 @@ mod tests {
                 .iter()
                 .any(|q| q.media.is_none() && q.unavailable.contains("DRM"))
         );
-        let merged = merge(Ok(catalogue.clone()), Ok(catalogue)).unwrap();
-        assert_eq!(merged.options.len(), 3);
     }
     #[test]
     fn cache_is_bounded_expires_and_rejects_old_account_results() {
@@ -425,18 +425,7 @@ mod tests {
     }
 
     #[test]
-    fn account_only_formats_survive_merging_and_partial_failures_are_visible() {
-        let public = parse(br#"{"formats":[{"format_id":"public","vcodec":"vp9","acodec":"opus","protocol":"https","url":"https://cdn.example/public"}]}"#).unwrap();
-        let account = parse(br#"{"formats":[{"format_id":"account","vcodec":"av01","acodec":"aac","protocol":"https","url":"https://cdn.example/account"}]}"#).unwrap();
-        let merged = merge(Ok(public.clone()), Ok(account)).unwrap();
-        assert_eq!(merged.options.len(), 2);
-        let partial = merge(Ok(public), Err(anyhow::anyhow!("synthetic lookup failure"))).unwrap();
-        assert_eq!(partial.options.len(), 1);
-        assert!(partial.note.contains("Signed-in quality lookup failed"));
-    }
-
-    #[test]
-    fn captions_merge_without_losing_account_tracks_and_expire_with_the_catalogue() {
+    fn captions_from_the_same_lookup_expire_with_the_catalogue() {
         let catalogue = |url: &str, account: bool| {
             let mut data = serde_json::json!({
                 "formats": [{"format_id":"v", "vcodec":"vp9", "acodec":"opus", "protocol":"https", "url":"https://cdn.example/video"}],
@@ -447,21 +436,10 @@ mod tests {
             }
             parse(&serde_json::to_vec(&data).unwrap()).unwrap()
         };
-        let merged = merge(
-            Ok(catalogue(
-                "https://www.youtube.com/api/timedtext?source=public",
-                false,
-            )),
-            Ok(catalogue(
-                "https://www.youtube.com/api/timedtext?source=account",
-                true,
-            )),
-        )
-        .unwrap();
-        assert_eq!(merged.subtitles.len(), 2);
-        assert!(merged.subtitles[0].url.ends_with("source=public"));
+        let catalogue = catalogue("https://www.youtube.com/api/timedtext?source=account", true);
+        assert_eq!(catalogue.subtitles.len(), 2);
         let mut cache = Cache::default();
-        cache.store(0, "video", None, Some(merged));
+        cache.store(0, "video", None, Some(catalogue));
         assert!(cache.catalogue("video").is_some());
         cache
             .entries

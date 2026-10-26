@@ -55,6 +55,7 @@ pub struct Preferences {
     pub subtitles: Subtitles,
     pub resume: bool,
     pub autoplay: bool,
+    pub prefetch: bool,
 }
 
 impl Default for Preferences {
@@ -66,6 +67,7 @@ impl Default for Preferences {
             subtitles: Subtitles::Off,
             resume: true,
             autoplay: false,
+            prefetch: false,
         }
     }
 }
@@ -145,6 +147,7 @@ impl Preferences {
         );
         state.set_playback_resume(self.resume);
         state.set_playback_autoplay(self.autoplay);
+        state.set_playback_prefetch(self.prefetch);
     }
 
     fn change(&mut self, setting: i32, value: i32) -> Option<()> {
@@ -156,6 +159,7 @@ impl Preferences {
             3 => self.subtitles = *SUBTITLES.get(index)?,
             4 if index <= 1 => self.resume = index == 1,
             5 if index <= 1 => self.autoplay = index == 1,
+            6 if index <= 1 => self.prefetch = index == 1,
             _ => return None,
         }
         Some(())
@@ -210,6 +214,9 @@ pub fn wire(app: &AppWindow) -> Arc<RwLock<Preferences>> {
                     next.publish(&app);
                     *saved.write().unwrap() = next;
                     state.set_playback_settings_error("".into());
+                    if setting == 6 {
+                        state.invoke_playback_prefetch_changed();
+                    }
                 }
                 Err(_) => {
                     saved.read().unwrap().publish(&app);

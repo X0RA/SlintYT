@@ -442,6 +442,25 @@ impl Tracker {
         Some(tracker)
     }
 
+    /// Collect real watch samples while the non-blocking metadata lookup runs.
+    pub fn pending(runtime: Handle) -> Self {
+        Self::idle(runtime, 0.)
+    }
+
+    pub fn inherit_samples(&mut self, mut pending: Self) {
+        self.previous = pending.previous.take();
+        self.segments = std::mem::take(&mut pending.segments);
+        self.began = pending.began;
+        self.last_report = pending.last_report;
+        self.started = pending.started;
+        self.force = pending.force;
+        self.discontinuous = pending.discontinuous;
+        if pending.duration > 0. {
+            self.duration = pending.duration;
+        }
+        self.flush(pending.finished);
+    }
+
     fn idle(runtime: Handle, duration: f64) -> Self {
         let now = Instant::now();
         Self {
@@ -564,6 +583,11 @@ impl Tracker {
         let Some((sample, _)) = self.previous else {
             return;
         };
+        // Keep samples until metadata supplies a reporter. Even a short video
+        // that ends before that lookup completes retains its final report.
+        let Some(sender) = &self.sender else {
+            return;
+        };
         let report = Report {
             position: sample.position,
             duration: sample.duration,
@@ -571,9 +595,6 @@ impl Tracker {
             playing: sample.playing() && !final_report,
             final_report,
             segments: std::mem::take(&mut self.segments),
-        };
-        let Some(sender) = &self.sender else {
-            return;
         };
         match sender.try_send(report) {
             Ok(()) => {}
@@ -683,6 +704,26 @@ mod tests {
         let mut tracker = Tracker::idle(Handle::current(), 600.);
         tracker.sender = Some(sender);
         (tracker, receiver)
+    }
+
+    #[tokio::test]
+    async fn late_metadata_retains_watched_segments_and_the_final_position() {
+        let now = Instant::now();
+        let mut pending = Tracker::pending(Handle::current());
+        pending.observe(sample(0., false), now);
+        pending.observe(sample(2., false), now + Duration::from_secs(2));
+        pending.seek(true);
+        pending.restarted();
+        pending.observe(sample(20., false), now + Duration::from_secs(3));
+        pending.observe(sample(22., false), now + Duration::from_secs(5));
+        pending.flush(true);
+        let (mut tracker, mut reports) = test_tracker();
+        tracker.inherit_samples(pending);
+        let report = reports.recv().await.unwrap();
+        assert_eq!(report.segments, [(0., 2.), (20., 22.)]);
+        assert_eq!(report.position, 22.);
+        assert!(report.final_report);
+        assert!(reports.try_recv().is_err());
     }
 
     fn test_client() -> Arc<Client> {

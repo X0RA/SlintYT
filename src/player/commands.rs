@@ -28,6 +28,10 @@ pub enum Command {
         speed: f32,
         tracking: Option<Box<(Arc<super::progress::Client>, super::progress::Info)>>,
     },
+    Tracking {
+        epoch: u64,
+        tracking: Option<Box<(Arc<super::progress::Client>, super::progress::Info)>>,
+    },
     Toggle(u64, bool),
     Seek(u64, f32),
     Volume(u64, f32),
@@ -48,6 +52,7 @@ pub enum Command {
 pub(super) enum Update {
     Loaded,
     Progress(bool),
+    ProgressUnavailable,
     Paused(bool),
     Position(f64),
     Seeked(f64),
@@ -82,6 +87,10 @@ fn playback_error(error: &libmpv2::Error, http_status: Option<u16>) -> String {
         ),
         None => format!("Playback failed: {detail}. Retry to get fresh video streams."),
     }
+}
+
+fn recoverable(error: &libmpv2::Error, status: Option<u16>) -> bool {
+    status.is_some() || matches!(error, libmpv2::Error::Raw(-13 | -16 | -17))
 }
 
 fn http_error_status(message: &str) -> Option<u16> {
@@ -122,10 +131,23 @@ pub(super) fn publish(
                 | Update::Duration(_)
                 | Update::Speed(_)
         );
+        let prefetch = matches!(
+            update,
+            Update::Loaded
+                | Update::Position(_)
+                | Update::Duration(_)
+                | Update::Seeked(_)
+                | Update::Speed(_)
+                | Update::Paused(_)
+                | Update::Buffering(_)
+        );
         if let Update::Position(seconds) = update {
             super::media_keys::position(seconds);
         }
         match update {
+            Update::ProgressUnavailable => state.set_player_progress_note(
+                "YouTube progress is unavailable for this playback.".into(),
+            ),
             Update::Progress(ok) => state.set_player_progress_note(
                 if ok {
                     ""
@@ -164,8 +186,15 @@ pub(super) fn publish(
                 state.set_player_subtitle_note(note.into());
                 state.set_player_subtitles_loading(false);
             }
-            Update::Error(error, status) => super::fail(&app, &playback_error(&error, status)),
+            Update::Error(error, status)
+                if !recoverable(&error, status) || !state.invoke_player_recover_stream() =>
+            {
+                super::fail(&app, &playback_error(&error, status));
+            }
             _ => {}
+        }
+        if prefetch {
+            state.invoke_player_prefetch_check();
         }
         if media {
             super::media_keys::refresh(&app);
@@ -265,6 +294,27 @@ fn sample_progress(engine: &Mpv, tracker: &mut Option<super::progress::Tracker>)
     }
 }
 
+fn make_tracker(
+    tracking: Option<Box<(Arc<super::progress::Client>, super::progress::Info)>>,
+    weak: &slint::Weak<AppWindow>,
+    current: &Arc<AtomicU64>,
+    epoch: u64,
+    runtime: &tokio::runtime::Handle,
+    tasks: &super::progress::Tasks,
+) -> Option<super::progress::Tracker> {
+    let (client, info) = *tracking?;
+    let status_weak = weak.clone();
+    let status_current = current.clone();
+    super::progress::Tracker::new(client, info, runtime.clone(), tasks, move |ok| {
+        publish(
+            &status_weak,
+            status_current.clone(),
+            epoch,
+            Update::Progress(ok),
+        );
+    })
+}
+
 pub fn start(
     app: &AppWindow,
     engine: Arc<Mpv>,
@@ -304,7 +354,7 @@ pub fn start(
                         | Command::Speed(e, _)
                         | Command::Mute(e, _)
                         | Command::FrameStep(e, _, _) => *e,
-                        Command::Subtitle { epoch, .. } => *epoch,
+                        Command::Subtitle { epoch, .. } | Command::Tracking { epoch, .. } => *epoch,
                         Command::Shutdown(_) => unreachable!(),
                     };
                     if current.load(Ordering::Acquire) != epoch {
@@ -357,31 +407,21 @@ pub fn start(
                                 AUDIO_CHANNELS.store(0, Ordering::Release);
                                 engine.command("loadfile", &[&source, "replace"])?;
                                 events = Some((epoch, client, None));
-                                if let Some((client, info)) = tracking.map(|t| *t) {
-                                    let status_weak = weak.clone();
-                                    let status_current = current.clone();
-                                    tracker = super::progress::Tracker::new(
-                                        client,
-                                        info,
-                                        runtime.clone(),
-                                        &tasks,
-                                        move |ok| {
-                                            publish(
-                                                &status_weak,
-                                                status_current.clone(),
-                                                epoch,
-                                                Update::Progress(ok),
-                                            )
-                                        },
+                                let has_metadata = tracking.is_some();
+                                tracker = make_tracker(
+                                    tracking, &weak, &current, epoch, &runtime, &tasks,
+                                );
+                                if has_metadata && tracker.is_none() {
+                                    publish(
+                                        &weak,
+                                        current.clone(),
+                                        epoch,
+                                        Update::ProgressUnavailable,
                                     );
-                                    if tracker.is_none() {
-                                        publish(
-                                            &weak,
-                                            current.clone(),
-                                            epoch,
-                                            Update::Progress(false),
-                                        );
-                                    }
+                                }
+                                if tracker.is_none() {
+                                    tracker =
+                                        Some(super::progress::Tracker::pending(runtime.clone()));
                                 }
                                 #[cfg(test)]
                                 IDLE.store(false, Ordering::Release);
@@ -389,6 +429,22 @@ pub fn start(
                             })()
                         }
                         _ if !events.as_ref().is_some_and(|(e, _, _)| *e == epoch) => Ok(()),
+                        Command::Tracking { tracking, .. } => {
+                            let pending = tracker.take();
+                            tracker =
+                                make_tracker(tracking, &weak, &current, epoch, &runtime, &tasks);
+                            if let Some(tracker) = &mut tracker {
+                                if let Some(pending) = pending {
+                                    tracker.inherit_samples(pending);
+                                }
+                            } else {
+                                publish(&weak, current.clone(), epoch, Update::ProgressUnavailable);
+                            }
+                            if loaded {
+                                sample_progress(&engine, &mut tracker);
+                            }
+                            Ok(())
+                        }
                         Command::Toggle(_, replay) => {
                             if replay {
                                 if let Some(tracker) = &mut tracker {
@@ -574,6 +630,17 @@ pub fn start(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_stream_failures_trigger_resolution_recovery() {
+        for code in [-13, -16, -17] {
+            assert!(recoverable(&libmpv2::Error::Raw(code), None));
+        }
+        for code in [-3, -4, -14, -15] {
+            assert!(!recoverable(&libmpv2::Error::Raw(code), None));
+        }
+        assert!(recoverable(&libmpv2::Error::Raw(-1), Some(403)));
+    }
 
     #[test]
     fn quality_labels_describe_the_decoded_stream_in_either_orientation() {

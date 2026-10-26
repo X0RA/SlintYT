@@ -180,6 +180,7 @@ mod tests {
             subtitles: Subtitles::English,
             resume: false,
             autoplay: true,
+            prefetch: true,
         };
         store.save_playback(&preferences).unwrap();
         assert!(store.load_settings().unwrap().bookmarks_enabled);

@@ -94,8 +94,10 @@ export global AppState {
     in-out property <int> playback-subtitles: 0;
     in-out property <bool> playback-resume: true;
     in-out property <bool> playback-autoplay: false;
+    in-out property <bool> playback-prefetch: false;
+    callback playback-prefetch-changed();
     in-out property <string> playback-settings-error;
-    // Fields 0–5 follow the six rows in Settings → Playback.
+    // Fields 0–6 follow the rows in Settings → Playback.
     callback playback-setting-changed(int, int);
     callback open-data-folder();
     // Enabled only by the macOS tool manager (or standalone mock previews).
@@ -194,6 +196,8 @@ export global AppState {
     callback player-volume-changed(float);
     callback player-toggle-fullscreen();
     callback player-retry();
+    callback player-recover-stream() -> bool;
+    callback player-prefetch-check();
     callback player-select-quality(int);
     callback player-select-subtitle(int);
     callback open-subscriptions(bool);

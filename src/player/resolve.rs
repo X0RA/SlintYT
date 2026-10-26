@@ -58,30 +58,105 @@ pub fn valid_id(id: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
 }
 
-/// macOS uses app-private playback tools; other platforms use PATH.
-/// Selection combines resolution eligibility with codec and resolution ranking.
-pub async fn resolve(id: &str, cookies: &str, selection: &StreamSelection) -> Result<Media> {
-    #[cfg(target_os = "macos")]
-    {
-        let tools = crate::macos_tools::installed_paths().await?;
-        return resolve_with(
-            tools.yt_dlp.as_os_str(),
-            id,
-            cookies,
-            Duration::from_secs(90),
-            selection,
-        )
-        .await;
+/// A normal lookup never probes media. Recovery is bounded to public URLs,
+/// then a checked lookup if mpv rejects those too.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub(super) enum Mode {
+    #[default]
+    Normal,
+    Public,
+    Verified,
+}
+
+impl Mode {
+    pub fn next(self) -> Option<Self> {
+        match self {
+            Self::Normal => Some(Self::Public),
+            Self::Public => Some(Self::Verified),
+            Self::Verified => None,
+        }
     }
+}
+
+pub(super) struct Lookup {
+    pub media: Media,
+    pub catalogue: Result<super::quality::Catalogue, String>,
+}
+
+/// macOS uses app-private playback tools; other platforms use PATH.
+pub(super) async fn resolve(
+    id: &str,
+    cookies: &str,
+    selection: &StreamSelection,
+    mode: Mode,
+) -> Result<Lookup> {
+    #[cfg(target_os = "macos")]
+    let paths = crate::macos_tools::installed_paths().await?;
+    #[cfg(target_os = "macos")]
+    let executable = paths.yt_dlp.as_os_str();
     #[cfg(not(target_os = "macos"))]
+    let executable = OsStr::new("yt-dlp");
     resolve_with(
-        OsStr::new("yt-dlp"),
+        executable,
         id,
         cookies,
         Duration::from_secs(90),
         selection,
+        mode,
     )
     .await
+}
+
+/// A separate, unprobed menu lookup is only needed when the shared response
+/// could not supply a catalogue. It never replaces the stream being played.
+pub(super) async fn catalogue(
+    id: &str,
+    cookies: &str,
+    mode: Mode,
+) -> Result<super::quality::Catalogue> {
+    #[cfg(target_os = "macos")]
+    let paths = crate::macos_tools::installed_paths().await?;
+    #[cfg(target_os = "macos")]
+    let executable = paths.yt_dlp.as_os_str();
+    #[cfg(not(target_os = "macos"))]
+    let executable = OsStr::new("yt-dlp");
+    catalogue_with(executable, id, cookies, mode, Duration::from_secs(90)).await
+}
+
+async fn catalogue_with(
+    executable: &OsStr,
+    id: &str,
+    cookies: &str,
+    mode: Mode,
+    timeout: Duration,
+) -> Result<super::quality::Catalogue> {
+    let signed_in = mode != Mode::Public && !session_config(cookies)?.is_empty();
+    tokio::time::timeout(timeout, async {
+        let attempt = async |cookies: &str, timeout| {
+            let output = extract(
+                executable,
+                id,
+                cookies,
+                false,
+                timeout,
+                &StreamSelection::default(),
+            )
+            .await?;
+            super::quality::parse(&output)
+        };
+        match attempt(
+            if signed_in { cookies } else { "" },
+            if signed_in { timeout / 2 } else { timeout },
+        )
+        .await
+        {
+            Ok(catalogue) => Ok(catalogue),
+            Err(_) if signed_in => attempt("", timeout).await,
+            Err(error) => Err(error),
+        }
+    })
+    .await
+    .context("Finding video formats timed out. Refresh streams to retry.")?
 }
 
 async fn resolve_with(
@@ -90,19 +165,29 @@ async fn resolve_with(
     cookies: &str,
     timeout: Duration,
     selection: &StreamSelection,
-) -> Result<Media> {
+    mode: Mode,
+) -> Result<Lookup> {
     if !valid_id(id) {
         bail!("This video has an invalid YouTube ID.");
     }
-    // Public videos do not need account cookies. Signed-in extraction can
-    // expose a smaller set of formats, including URLs rejected by the CDN.
-    // Retain account access for videos that cannot be resolved anonymously.
-    // Both attempts share one deadline; cancellation still kills the child.
+    let signed_in = mode != Mode::Public && !session_config(cookies)?.is_empty();
+    let check = mode == Mode::Verified;
+    // Signed-in first. Public is a fallback, never an unconditional second
+    // extraction. Both attempts share a deadline; cancellation kills the child.
     tokio::time::timeout(timeout, async {
-        match run(executable, id, "", timeout, selection).await {
-            Ok(media) => Ok(media),
-            Err(error) if session_config(cookies)?.is_empty() => Err(error),
-            Err(_) => run(executable, id, cookies, timeout, selection).await,
+        match run(
+            executable,
+            id,
+            if signed_in { cookies } else { "" },
+            if signed_in { timeout / 2 } else { timeout },
+            selection,
+            check,
+        )
+        .await
+        {
+            Ok(lookup) => Ok(lookup),
+            Err(_) if signed_in => run(executable, id, "", timeout, selection, check).await,
+            Err(error) => Err(error),
         }
     })
     .await
@@ -182,26 +267,14 @@ async fn run(
     cookies: &str,
     timeout: Duration,
     selection: &StreamSelection,
-) -> Result<Media> {
-    parse_media(&extract(executable, id, cookies, true, timeout, selection).await?)
-}
-
-pub(super) async fn catalogue_output(id: &str, cookies: &str) -> Result<Zeroizing<Vec<u8>>> {
-    #[cfg(target_os = "macos")]
-    let tools = crate::macos_tools::installed_paths().await?;
-    #[cfg(target_os = "macos")]
-    let executable = tools.yt_dlp.as_os_str();
-    #[cfg(not(target_os = "macos"))]
-    let executable = OsStr::new("yt-dlp");
-    extract(
-        executable,
-        id,
-        cookies,
-        false,
-        Duration::from_secs(90),
-        &StreamSelection::default(),
-    )
-    .await
+    check: bool,
+) -> Result<Lookup> {
+    let output = extract(executable, id, cookies, check, timeout, selection).await?;
+    Ok(Lookup {
+        media: parse_media(&output)?,
+        // A malformed catalogue must not prevent an otherwise playable video.
+        catalogue: super::quality::parse(&output).map_err(|error| error.to_string()),
+    })
 }
 
 async fn extract(
@@ -432,7 +505,7 @@ mod tests {
             r#"
 case "$*" in *synthetic-secret*|*python*|*--cookies*) exit 11;; esac
 case "$*" in *--ignore-config*--no-plugin-dirs*--config-locations*) ;; *) exit 12;; esac
-case "$*" in *--check-formats*) ;; *) exit 14;; esac
+case "$*" in *--no-check-formats*) ;; *) exit 14;; esac
 config=$(cat)
 case "$config" in *'Cookie: SAPISID=synthetic-secret'*) ;; *) exit 13;; esac
 printf '%s\n' '{"url":"https://cdn.example/video"}'
@@ -445,7 +518,8 @@ printf '%s\n' '{"url":"https://cdn.example/video"}'
                 "abcdefghijk",
                 cookies,
                 Duration::from_secs(3),
-                &StreamSelection::default()
+                &StreamSelection::default(),
+                false
             )
             .await
             .is_ok()
@@ -460,6 +534,7 @@ printf '%s\n' '{"url":"https://cdn.example/video"}'
             cookies,
             Duration::from_secs(3),
             &StreamSelection::default(),
+            false,
         )
         .await;
         assert!(
@@ -476,6 +551,7 @@ printf '%s\n' '{"url":"https://cdn.example/video"}'
             "",
             Duration::from_millis(100),
             &StreamSelection::default(),
+            false,
         )
         .await;
         assert!(result.err().unwrap().to_string().contains("timed out"));
@@ -485,7 +561,8 @@ printf '%s\n' '{"url":"https://cdn.example/video"}'
                 "abcdefghijk",
                 "",
                 Duration::from_secs(3),
-                &StreamSelection::default()
+                &StreamSelection::default(),
+                false
             )
             .await
             .err()
@@ -501,14 +578,54 @@ printf '%s\n' '{"url":"https://cdn.example/video"}'
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn public_stream_lookup_uses_no_cookies_and_account_access_is_a_fallback() {
+    async fn signed_in_lookup_is_reused_and_public_is_only_a_fallback() {
         let root = tempfile::tempdir().unwrap();
         let cookies = ".youtube.com\tTRUE\t/\tTRUE\t0\tSAPISID\tsynthetic-secret\n";
         let exe = fake_executable(
             root.path(),
             r#"
 config=$(cat)
-[ -z "$config" ] || exit 21
+case "$config" in *'Cookie: SAPISID=synthetic-secret'*) ;; *) exit 21;; esac
+[ ! -e "$0.success" ] || exit 24
+touch "$0.success"
+case "$*" in *--no-check-formats*) ;; *) exit 25;; esac
+printf '%s\n' '{"url":"https://cdn.example/account","formats":[{"format_id":"v","url":"https://cdn.example/account","protocol":"https","vcodec":"av01","acodec":"aac","height":720}],"subtitles":{"en":[{"url":"https://www.youtube.com/api/timedtext?lang=en","ext":"vtt"}]}}'
+"#,
+        );
+        let media = resolve_with(
+            exe.as_os_str(),
+            "abcdefghijk",
+            cookies,
+            Duration::from_secs(3),
+            &StreamSelection::default(),
+            Mode::Normal,
+        )
+        .await
+        .unwrap();
+        assert_eq!(media.media.source().unwrap(), "https://cdn.example/account");
+        let catalogue = media.catalogue.unwrap();
+        assert_eq!(catalogue.options.len(), 1);
+        assert_eq!(catalogue.subtitles.len(), 1);
+        assert_eq!(
+            catalogue.options[0]
+                .media
+                .as_ref()
+                .unwrap()
+                .source()
+                .unwrap(),
+            "https://cdn.example/account"
+        );
+
+        fake_executable(
+            root.path(),
+            r#"
+config=$(cat)
+if [ ! -e "$0.attempted" ]; then
+    case "$config" in *'Cookie: SAPISID=synthetic-secret'*) ;; *) exit 22;; esac
+    touch "$0.attempted"
+    exit 1
+fi
+[ -z "$config" ] || exit 23
 printf '%s\n' '{"url":"https://cdn.example/public"}'
 "#,
         );
@@ -518,34 +635,11 @@ printf '%s\n' '{"url":"https://cdn.example/public"}'
             cookies,
             Duration::from_secs(3),
             &StreamSelection::default(),
+            Mode::Normal,
         )
         .await
         .unwrap();
-        assert_eq!(media.source().unwrap(), "https://cdn.example/public");
-
-        fake_executable(
-            root.path(),
-            r#"
-config=$(cat)
-if [ ! -e "$0.attempted" ]; then
-    [ -z "$config" ] || exit 22
-    touch "$0.attempted"
-    exit 1
-fi
-case "$config" in *'Cookie: SAPISID=synthetic-secret'*) ;; *) exit 23;; esac
-printf '%s\n' '{"url":"https://cdn.example/account"}'
-"#,
-        );
-        let media = resolve_with(
-            exe.as_os_str(),
-            "abcdefghijk",
-            cookies,
-            Duration::from_secs(3),
-            &StreamSelection::default(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(media.source().unwrap(), "https://cdn.example/account");
+        assert_eq!(media.media.source().unwrap(), "https://cdn.example/public");
     }
 
     #[cfg(unix)]
@@ -566,7 +660,8 @@ exit 1
                 "abcdefghijk",
                 "",
                 Duration::from_secs(3),
-                &StreamSelection::default()
+                &StreamSelection::default(),
+                Mode::Normal
             )
             .await
             .is_err()
@@ -582,11 +677,114 @@ exit 1
             ".youtube.com\tTRUE\t/\tTRUE\t0\tSAPISID\tsynthetic-secret\n",
             Duration::from_millis(100),
             &StreamSelection::default(),
+            Mode::Normal,
         )
         .await
         .err()
         .unwrap();
         assert!(error.to_string().contains("timed out"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn recovery_uses_public_without_probes_then_checked_extraction_and_stops() {
+        assert_eq!(Mode::Normal.next(), Some(Mode::Public));
+        assert_eq!(Mode::Public.next(), Some(Mode::Verified));
+        assert_eq!(Mode::Verified.next(), None);
+        let root = tempfile::tempdir().unwrap();
+        let cookies = ".youtube.com\tTRUE\t/\tTRUE\t0\tSAPISID\tsynthetic-secret\n";
+        let exe = fake_executable(
+            root.path(),
+            r#"
+config=$(cat)
+[ -z "$config" ] || exit 21
+case "$*" in *--no-check-formats*--skip-download*) exit 22;; esac
+case "$*" in *--skip-download*--no-check-formats*) ;; *) exit 23;; esac
+printf '%s\n' '{"url":"https://cdn.example/public"}'
+"#,
+        );
+        let lookup = resolve_with(
+            exe.as_os_str(),
+            "abcdefghijk",
+            cookies,
+            Duration::from_secs(3),
+            &StreamSelection::default(),
+            Mode::Public,
+        )
+        .await
+        .unwrap();
+        assert_eq!(lookup.media.source().unwrap(), "https://cdn.example/public");
+        fake_executable(
+            root.path(),
+            r#"
+config=$(cat)
+case "$config" in *'Cookie: SAPISID=synthetic-secret'*) ;; *) exit 24;; esac
+case "$*" in *--check-formats*) ;; *) exit 25;; esac
+printf '%s\n' '{"url":"https://cdn.example/checked"}'
+"#,
+        );
+        let lookup = resolve_with(
+            exe.as_os_str(),
+            "abcdefghijk",
+            cookies,
+            Duration::from_secs(3),
+            &StreamSelection::default(),
+            Mode::Verified,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            lookup.media.source().unwrap(),
+            "https://cdn.example/checked"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn menu_retry_is_independent_of_stream_selection_and_can_fall_back_to_public() {
+        let root = tempfile::tempdir().unwrap();
+        let exe = fake_executable(
+            root.path(),
+            r#"
+config=$(cat)
+case "$*" in *--no-check-formats*) ;; *) exit 1;; esac
+if [ -n "$config" ]; then
+    printf '%s\n' '{"url":"https://cdn.example/playable","formats":"invalid"}'
+else
+    printf '%s\n' '{"formats":[{"format_id":"18","url":"https://cdn.example/muxed","protocol":"https","vcodec":"avc1","acodec":"aac"}],"subtitles":{"en":[{"url":"https://www.youtube.com/api/timedtext?lang=en","ext":"vtt"}]}}'
+fi
+"#,
+        );
+        let cookies = ".youtube.com\tTRUE\t/\tTRUE\t0\tSAPISID\tsynthetic-secret\n";
+        let lookup = resolve_with(
+            exe.as_os_str(),
+            "abcdefghijk",
+            cookies,
+            Duration::from_secs(3),
+            &StreamSelection::default(),
+            Mode::Normal,
+        )
+        .await
+        .unwrap();
+        assert!(lookup.catalogue.is_err());
+        assert_eq!(
+            lookup.media.source().unwrap(),
+            "https://cdn.example/playable"
+        );
+        let menu = catalogue_with(
+            exe.as_os_str(),
+            "abcdefghijk",
+            cookies,
+            Mode::Normal,
+            Duration::from_secs(3),
+        )
+        .await
+        .unwrap();
+        assert_eq!(menu.options.len(), 1);
+        assert_eq!(menu.subtitles.len(), 1);
+        // This response has no top-level selected stream: menu parsing does not
+        // depend on the playback selection being available in the new lookup.
+        assert!(menu.options[0].key.starts_with("18|"));
     }
 
     #[tokio::test]
@@ -609,19 +807,20 @@ exit 1
             &id,
             &cookies,
             &crate::playback_settings::Preferences::default().selection(),
+            Mode::Normal,
         )
         .await
         .expect("CLI lookup failed");
-        assert!(media.source().is_ok());
+        assert!(media.media.source().is_ok());
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(20))
             .build()
             .unwrap();
-        for (index, stream) in media.streams.iter().enumerate() {
+        for (index, stream) in media.media.streams.iter().enumerate() {
             let response = client
                 .get(stream)
-                .header("User-Agent", &media.user_agent)
-                .header("Referer", &media.referer)
+                .header("User-Agent", &media.media.user_agent)
+                .header("Referer", &media.media.referer)
                 .header("Range", "bytes=0-1023")
                 .send()
                 .await
@@ -636,7 +835,7 @@ exit 1
         }
         eprintln!(
             "Native import and yt-dlp lookup passed; {} stream(s), all session values withheld",
-            media.streams.len()
+            media.media.streams.len()
         );
     }
 

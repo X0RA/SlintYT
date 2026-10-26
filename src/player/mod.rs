@@ -30,6 +30,11 @@ pub struct Playback {
     cookies: RwLock<Option<Arc<str>>>,
     task: Mutex<Option<JoinHandle<()>>>,
     subtitle_task: Mutex<Option<JoinHandle<()>>>,
+    prefetch_task: Mutex<Option<JoinHandle<()>>>,
+    prefetch_attempt: Mutex<Option<std::time::Instant>>,
+    recovery: Mutex<resolve::Mode>,
+    requested_position: Mutex<f32>,
+    requested_subtitle: Mutex<Option<String>>,
     epoch: Arc<AtomicU64>,
     commands: Option<std::sync::mpsc::Sender<Command>>,
     ready: Arc<AtomicBool>,
@@ -52,19 +57,12 @@ struct Start {
     paused: bool,
     refresh: bool,
     restore: bool,
+    recovery: resolve::Mode,
 }
 
-fn selected_subtitle(app: &AppWindow, owner: &Playback) -> Option<String> {
-    let index = app.global::<AppState>().get_player_subtitle_index();
-    if index <= 0 {
-        return None;
-    }
-    owner
-        .subtitle_choices
-        .read()
-        .unwrap()
-        .get(index as usize - 1)
-        .map(|t| t.key.clone())
+fn selected_subtitle(owner: &Playback) -> Option<String> {
+    // Preserve intent even if a stream fails while its subtitle is downloading.
+    owner.requested_subtitle.lock().unwrap().clone()
 }
 
 fn show_subtitles(
@@ -77,6 +75,8 @@ fn show_subtitles(
     let index = selected
         .and_then(|key| tracks.iter().position(|t| t.key == key))
         .map_or(0, |i| i as i32 + 1);
+    *owner.requested_subtitle.lock().unwrap() =
+        (index > 0).then(|| tracks[index as usize - 1].key.clone());
     let mut labels = vec![slint::SharedString::from("Off")];
     labels.extend(
         tracks
@@ -135,6 +135,9 @@ impl Drop for Playback {
         if let Some(task) = self.task.get_mut().unwrap().take() {
             task.abort();
         }
+        if let Some(task) = self.prefetch_task.get_mut().unwrap().take() {
+            task.abort();
+        }
         if let Some(task) = self.subtitle_task.get_mut().unwrap().take() {
             task.abort();
         }
@@ -151,6 +154,7 @@ impl Playback {
     }
 
     pub async fn shutdown(&self) {
+        self.cancel_prefetch();
         if let Some(task) = self.subtitle_task.lock().unwrap().take() {
             task.abort();
         }
@@ -178,6 +182,7 @@ impl Playback {
     }
 
     fn cancel(&self) {
+        self.cancel_prefetch();
         if let Some(task) = self.subtitle_task.lock().unwrap().take() {
             task.abort();
         }
@@ -188,6 +193,106 @@ impl Playback {
         if let Some(commands) = &self.commands {
             let _ = commands.send(Command::Stop(epoch));
         }
+    }
+
+    fn cancel_prefetch(&self) {
+        *self.prefetch_attempt.lock().unwrap() = None;
+        if let Some(task) = self.prefetch_task.lock().unwrap().take() {
+            task.abort();
+        }
+    }
+
+    fn prefetch_next(self: &Arc<Self>, app: &AppWindow) {
+        let state = app.global::<AppState>();
+        let preferences = self.preferences.read().unwrap().clone();
+        if !preferences.prefetch
+            || !state.get_player_open()
+            || state.get_player_loading()
+            || !state.get_player_error().is_empty()
+            || state.get_playlist_shuffle()
+            || state.get_player_paused()
+            || state.get_player_buffering()
+            || state.get_player_ended()
+            || !prefetch_due(
+                state.get_player_position(),
+                state.get_player_duration(),
+                state.get_player_speed(),
+            )
+        {
+            return;
+        }
+        let id = {
+            let queue = self.queue.lock().unwrap();
+            let Some(index) = queue.next(false, 0) else {
+                return;
+            };
+            queue.entries[index].id.clone()
+        };
+        let selection = preferences.selection();
+        let key = selection.cache_key();
+        if self.cache.lock().unwrap().automatic(&id, &key).is_some() {
+            return;
+        }
+        let mut task = self.prefetch_task.lock().unwrap();
+        if task.as_ref().is_some_and(|task| !task.is_finished()) {
+            return;
+        }
+        let Some(cookies) = self.cookies.read().unwrap().clone() else {
+            return;
+        };
+        let mut attempt = self.prefetch_attempt.lock().unwrap();
+        if attempt.is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(60)) {
+            return;
+        }
+        *attempt = Some(std::time::Instant::now());
+        let cache = self.cache.clone();
+        let generation = cache.lock().unwrap().generation;
+        // Only the next sequential playlist entry. No stream checks, media
+        // requests, progress reporting, or subtitle downloads are made here.
+        *task = Some(self.runtime.spawn(async move {
+            if let Ok(lookup) =
+                resolve::resolve(&id, &cookies, &selection, resolve::Mode::Normal).await
+            {
+                cache.lock().unwrap().store(
+                    generation,
+                    &id,
+                    Some((key, lookup.media)),
+                    lookup.catalogue.ok(),
+                );
+            }
+        }));
+    }
+
+    fn recover(self: &Arc<Self>, app: &AppWindow) -> bool {
+        let Some(mode) = self.recovery.lock().unwrap().next() else {
+            return false;
+        };
+        let state = app.global::<AppState>();
+        let (id, title) = self.current.lock().unwrap().clone();
+        if !resolve::valid_id(&id) || !state.get_player_open() {
+            return false;
+        }
+        let quality = self.selected.lock().unwrap().clone();
+        let position = if state.get_player_loading() {
+            *self.requested_position.lock().unwrap()
+        } else {
+            state.get_player_position()
+        };
+        self.load(
+            app,
+            id,
+            title,
+            Start {
+                quality,
+                subtitle: selected_subtitle(self),
+                position,
+                paused: state.get_player_paused(),
+                refresh: true,
+                recovery: mode,
+                ..Default::default()
+            },
+        );
+        true
     }
 
     fn load_subtitle(self: &Arc<Self>, app: &AppWindow, index: i32, epoch: u64) {
@@ -209,6 +314,7 @@ impl Playback {
             state.set_player_subtitle_note("Could not load subtitles. Please retry.".into());
             return;
         };
+        *self.requested_subtitle.lock().unwrap() = track.as_ref().map(|track| track.key.clone());
         let previous_index = state.get_player_subtitle_index();
         state.set_player_subtitles_loading(true);
         state.set_player_subtitle_note("".into());
@@ -291,6 +397,9 @@ impl Playback {
 
     fn load(self: &Arc<Self>, app: &AppWindow, id: String, title: String, start: Start) {
         self.cancel();
+        *self.recovery.lock().unwrap() = start.recovery;
+        *self.requested_position.lock().unwrap() = start.position;
+        *self.requested_subtitle.lock().unwrap() = start.subtitle.clone();
         let state = app.global::<AppState>();
         let preferences = self.preferences.read().unwrap().clone();
         let restore = start.restore && preferences.resume;
@@ -302,7 +411,17 @@ impl Playback {
         if start.new_video {
             *self.automatic_selection.lock().unwrap() = preferences.selection();
         }
-        let selection = self.automatic_selection.lock().unwrap().clone();
+        let mut selection = self.automatic_selection.lock().unwrap().clone();
+        if let Some(key) = &start.quality {
+            let Some(format) = quality::manual_selection(key) else {
+                fail(
+                    app,
+                    "This format cannot be selected. Choose another quality.",
+                );
+                return;
+            };
+            selection.format = format;
+        }
         state.set_player_speed(speed);
         state.set_player_open(true);
         state.set_player_title(title.clone().into());
@@ -364,6 +483,7 @@ impl Playback {
         let generation = cache.lock().unwrap().generation;
         let selection_key = selection.cache_key();
         let progress_client = self.progress.read().unwrap().clone();
+        let current_epoch = self.epoch.clone();
         *self.task.lock().unwrap() = Some(self.runtime.spawn(async move {
             let metadata = async {
                 match &progress_client {
@@ -372,31 +492,61 @@ impl Playback {
                 }
             };
             let streams = async {
-            let cached = cache.lock().unwrap().automatic(&id, &selection_key);
-            if let Some(key) = &start.quality {
-                let cached_catalogue = cache.lock().unwrap().catalogue(&id);
-                let catalogue = match cached_catalogue {
-                    Some(catalogue) => Ok(catalogue),
-                    None => quality::load(&id, &cookies).await,
-                };
-                catalogue.and_then(|catalogue| {
-                    let selected = catalogue.options.iter().find(|q| &q.key == key)
-                        .ok_or_else(|| anyhow::anyhow!("This quality is no longer offered by YouTube. Choose another format."))?;
-                    let media = selected.media.clone().ok_or_else(|| anyhow::anyhow!(selected.unavailable.clone()));
-                    cache.lock().unwrap().store(generation, &id, None, Some(catalogue));
-                    media
-                })
-            } else if let Some(media) = cached {
-                Ok(media)
-            } else {
-                let media = resolve::resolve(&id, &cookies, &selection).await;
-                if let Ok(media) = &media { cache.lock().unwrap().store(generation, &id, Some((selection_key.clone(), media.clone())), None); }
-                media
-            }
+                if let Some(key) = &start.quality {
+                    let catalogue = cache.lock().unwrap().catalogue(&id);
+                    if let Some(catalogue) = catalogue {
+                        return catalogue
+                            .options
+                            .iter()
+                            .find(|q| &q.key == key)
+                            .ok_or_else(|| anyhow::anyhow!("This quality is no longer available."))?
+                            .media
+                            .clone()
+                            .ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "This format cannot be played. Choose another quality."
+                                )
+                            });
+                    }
+                } else if let Some(media) = cache.lock().unwrap().automatic(&id, &selection_key) {
+                    return Ok(media);
+                }
+                let lookup = resolve::resolve(&id, &cookies, &selection, start.recovery).await?;
+                if let Ok(catalogue) = &lookup.catalogue {
+                    let catalogue = catalogue.clone();
+                    let formats_owner = owner.clone();
+                    let _ = weak.upgrade_in_event_loop(move |app| {
+                        if let Some(owner) = formats_owner.upgrade()
+                            && commands::accepts(
+                                owner.epoch.load(Ordering::Acquire),
+                                epoch,
+                                app.global::<AppState>().get_player_open(),
+                            )
+                        {
+                            show_qualities(&app, &owner, catalogue);
+                        }
+                    });
+                }
+                cache.lock().unwrap().store(
+                    generation,
+                    &id,
+                    start
+                        .quality
+                        .is_none()
+                        .then(|| (selection_key.clone(), lookup.media.clone())),
+                    lookup.catalogue.ok(),
+                );
+                Ok(lookup.media)
             };
-            let (result, info) = tokio::join!(streams, metadata);
-            let position = if restore { info.as_ref().and_then(|info| info.resume).unwrap_or(0.) as f32 } else { start.position };
-            let tracking = progress_client.zip(info).map(Box::new);
+            let mut metadata = Box::pin(metadata);
+            let (result, info, pending_metadata) =
+                startup(streams, metadata.as_mut(), restore).await;
+            let position = if restore {
+                info.as_ref().and_then(|info| info.resume).unwrap_or(0.) as f32
+            } else {
+                start.position
+            };
+            let tracking = progress_client.clone().zip(info).map(Box::new);
             // Only automatic picks for a new video report a codec fallback.
             let codec_notice = match &result {
                 Ok(media) if start.new_video && start.quality.is_none() => {
@@ -411,7 +561,9 @@ impl Playback {
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             }
+            let playable = result.is_ok();
             let playback_owner = owner.clone();
+            let playback_commands = commands.clone();
             let _ = weak.upgrade_in_event_loop(move |app| {
                 let Some(owner) = playback_owner.upgrade() else {
                     return;
@@ -430,10 +582,15 @@ impl Playback {
                 }
                 match result {
                     Ok(media) => {
+                        *owner.requested_position.lock().unwrap() = position;
                         app.global::<AppState>().set_player_position(position);
-                        if tracking.is_none() { app.global::<AppState>().set_player_progress_note("YouTube progress is unavailable for this playback.".into()); }
+                        if tracking.is_none() && !pending_metadata {
+                            app.global::<AppState>().set_player_progress_note(
+                                "YouTube progress is unavailable for this playback.".into(),
+                            );
+                        }
                         let loaded = media.source().and_then(|source| {
-                            commands
+                            playback_commands
                                 .send(Command::Load {
                                     epoch,
                                     source,
@@ -452,38 +609,110 @@ impl Playback {
                             app.global::<AppState>().set_toast(notice.into());
                         }
                     }
-                    Err(error) => fail(&app, &error.to_string()),
-                }
-            });
-            let cached_catalogue = cache.lock().unwrap().catalogue(&id);
-            let catalogue = match cached_catalogue {
-                Some(catalogue) => Ok(catalogue),
-                None => quality::load(&id, &cookies).await,
-            };
-            if let Ok(catalogue) = &catalogue {
-                cache.lock().unwrap().store(generation, &id, None, Some(catalogue.clone()));
-            }
-            let _ = weak.upgrade_in_event_loop(move |app| {
-                let Some(owner) = owner.upgrade() else { return; };
-                if owner.epoch.load(Ordering::Acquire) != epoch || !app.global::<AppState>().get_player_open() { return; }
-                match catalogue {
-                    Ok(catalogue) => {
-                        let tracks = catalogue.subtitles.clone();
-                        show_qualities(&app, &owner, catalogue);
-                        let selected = if start.new_video {
-                            subtitles::preferred(&tracks, preferences.subtitles).map(|t| t.key.clone())
-                        } else { start.subtitle };
-                        show_subtitles(&app, &owner, tracks, selected.as_deref(), epoch);
-                    }
                     Err(error) => {
-                        app.global::<AppState>().set_player_subtitles_loading(false);
-                        app.global::<AppState>().set_player_subtitle_note("Subtitle lookup failed. Refresh streams to retry.".into());
-                        app.global::<AppState>().set_player_qualities_loading(false);
-                        app.global::<AppState>().set_player_quality_note(error.to_string().into());
+                        // A failed public recovery can still try validated
+                        // signed-in streams (e.g. an account-only video).
+                        if start.recovery != resolve::Mode::Public || !owner.recover(&app) {
+                            fail(&app, &error.to_string());
+                        }
                     }
                 }
             });
+            let menus = async {
+                if !playable {
+                    return;
+                }
+                let cached = cache.lock().unwrap().catalogue(&id);
+                let catalogue = match cached {
+                    Some(catalogue) => Ok(catalogue),
+                    None => resolve::catalogue(&id, &cookies, start.recovery).await,
+                };
+                if let Ok(catalogue) = &catalogue {
+                    cache
+                        .lock()
+                        .unwrap()
+                        .store(generation, &id, None, Some(catalogue.clone()));
+                }
+                let _ = weak.upgrade_in_event_loop(move |app| {
+                    let Some(owner) = owner.upgrade() else {
+                        return;
+                    };
+                    if owner.epoch.load(Ordering::Acquire) != epoch
+                        || !app.global::<AppState>().get_player_open()
+                    {
+                        return;
+                    }
+                    match catalogue {
+                        Ok(catalogue) => {
+                            let tracks = catalogue.subtitles.clone();
+                            show_qualities(&app, &owner, catalogue);
+                            let selected = if start.new_video {
+                                subtitles::preferred(&tracks, preferences.subtitles)
+                                    .map(|t| t.key.clone())
+                            } else {
+                                start.subtitle
+                            };
+                            show_subtitles(&app, &owner, tracks, selected.as_deref(), epoch);
+                        }
+                        Err(error) => {
+                            app.global::<AppState>().set_player_subtitles_loading(false);
+                            app.global::<AppState>().set_player_subtitle_note(
+                                "Subtitle lookup failed. Refresh streams to retry.".into(),
+                            );
+                            app.global::<AppState>().set_player_qualities_loading(false);
+                            app.global::<AppState>()
+                                .set_player_quality_note(error.to_string().into());
+                        }
+                    }
+                });
+            };
+            let tracking = async {
+                if pending_metadata {
+                    let info = metadata.await;
+                    let tracking = progress_client.clone().zip(info).map(Box::new);
+                    // Queue on Slint after Load, so fast metadata cannot attach to
+                    // the previous file. The worker also checks the load epoch.
+                    let _ = weak.upgrade_in_event_loop(move |app| {
+                        if commands::accepts(
+                            current_epoch.load(Ordering::Acquire),
+                            epoch,
+                            app.global::<AppState>().get_player_open(),
+                        ) {
+                            let _ = commands.send(Command::Tracking { epoch, tracking });
+                        }
+                    });
+                }
+            };
+            tokio::join!(menus, tracking);
         }));
+    }
+}
+
+/// Use wall-clock remaining time so slow playback cannot outlast the cache TTL.
+fn prefetch_due(position: f32, duration: f32, speed: f32) -> bool {
+    position.is_finite()
+        && position >= 0.
+        && duration.is_finite()
+        && duration > position
+        && speed.is_finite()
+        && speed > 0.
+        && (duration - position) / speed <= 120.
+}
+
+/// Poll both operations concurrently, but only resume makes metadata a gate.
+async fn startup<T, M>(
+    streams: impl std::future::Future<Output = T>,
+    mut metadata: std::pin::Pin<&mut impl std::future::Future<Output = Option<M>>>,
+    restore: bool,
+) -> (T, Option<M>, bool) {
+    if restore {
+        let (streams, metadata) = tokio::join!(streams, metadata);
+        return (streams, metadata, false);
+    }
+    tokio::pin!(streams);
+    tokio::select! {
+        result = &mut streams => (result, None, true),
+        info = &mut metadata => (streams.await, info, false),
     }
 }
 
@@ -534,6 +763,11 @@ pub fn install(app: &AppWindow, runtime: Handle) -> Arc<Playback> {
         cookies: RwLock::new(None),
         task: Mutex::new(None),
         subtitle_task: Mutex::new(None),
+        prefetch_task: Mutex::new(None),
+        prefetch_attempt: Mutex::new(None),
+        recovery: Mutex::new(resolve::Mode::Normal),
+        requested_position: Mutex::new(0.),
+        requested_subtitle: Mutex::new(None),
         epoch,
         commands,
         ready: Arc::new(AtomicBool::new(false)),
@@ -550,6 +784,21 @@ pub fn install(app: &AppWindow, runtime: Handle) -> Arc<Playback> {
         register_renderer(app, engine.clone(), player.ready.clone());
     }
     let state = app.global::<AppState>();
+    let (weak, owner) = (app.as_weak(), player.clone());
+    state.on_player_recover_stream(move || weak.upgrade().is_some_and(|app| owner.recover(&app)));
+    let (weak, owner) = (app.as_weak(), player.clone());
+    state.on_player_prefetch_check(move || {
+        if let Some(app) = weak.upgrade() {
+            owner.prefetch_next(&app);
+        }
+    });
+    let (weak, owner) = (app.as_weak(), player.clone());
+    state.on_playback_prefetch_changed(move || {
+        owner.cancel_prefetch();
+        if let Some(app) = weak.upgrade() {
+            owner.prefetch_next(&app);
+        }
+    });
     let (weak, owner) = (app.as_weak(), player.clone());
     state.on_play_video(move |id, title| {
         if let Some(app) = weak.upgrade() {
@@ -737,11 +986,12 @@ pub fn install(app: &AppWindow, runtime: Handle) -> Arc<Playback> {
                 Start {
                     new_video: false,
                     quality,
-                    subtitle: selected_subtitle(&app, &owner),
+                    subtitle: selected_subtitle(&owner),
                     position: state.get_player_position(),
                     paused: state.get_player_paused(),
                     refresh: true,
                     restore: false,
+                    recovery: resolve::Mode::Normal,
                 },
             );
         }
@@ -772,11 +1022,12 @@ pub fn install(app: &AppWindow, runtime: Handle) -> Arc<Playback> {
             Start {
                 new_video: false,
                 quality,
-                subtitle: selected_subtitle(&app, &owner),
+                subtitle: selected_subtitle(&owner),
                 position: state.get_player_position(),
                 paused: state.get_player_paused(),
                 refresh: false,
                 restore: false,
+                recovery: resolve::Mode::Normal,
             },
         );
     });
@@ -918,5 +1169,76 @@ fn register_renderer(app: &AppWindow, engine: Arc<Mpv>, ready: Arc<AtomicBool>) 
         });
     if result.is_err() {
         fail(app, "The OpenGL video renderer is unavailable.");
+    }
+}
+
+#[cfg(test)]
+mod startup_tests {
+    use super::*;
+
+    #[test]
+    fn prefetch_waits_until_two_minutes_remain_at_the_current_speed() {
+        assert!(!prefetch_due(0., 600., 1.));
+        assert!(!prefetch_due(479., 600., 1.));
+        assert!(prefetch_due(480., 600., 1.));
+        assert!(prefetch_due(0., 90., 1.));
+        assert!(!prefetch_due(480., 600., 0.25));
+        assert!(prefetch_due(570., 600., 0.25));
+        assert!(prefetch_due(360., 600., 2.));
+        for (position, duration, speed) in [
+            (0., 0., 1.),
+            (600., 600., 1.),
+            (601., 600., 1.),
+            (-1., 90., 1.),
+            (0., f32::INFINITY, 1.),
+            (f32::NAN, 90., 1.),
+            (0., 90., 0.),
+        ] {
+            assert!(!prefetch_due(position, duration, speed));
+        }
+    }
+
+    #[tokio::test]
+    async fn playback_without_resume_does_not_wait_for_metadata() {
+        let mut metadata = Box::pin(std::future::pending::<Option<u32>>());
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            startup(async { "stream" }, metadata.as_mut(), false),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result, ("stream", None, true));
+    }
+
+    #[tokio::test]
+    async fn resume_waits_for_metadata_and_retains_the_server_position() {
+        let (send, receive) = tokio::sync::oneshot::channel();
+        let mut metadata = Box::pin(async { receive.await.ok() });
+        let mut startup = Box::pin(startup(async { "stream" }, metadata.as_mut(), true));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut startup)
+                .await
+                .is_err()
+        );
+        send.send(42).unwrap();
+        assert_eq!(startup.await, ("stream", Some(42), false));
+    }
+
+    #[tokio::test]
+    async fn early_metadata_is_kept_while_streams_load() {
+        let (send, receive) = tokio::sync::oneshot::channel();
+        let mut metadata = Box::pin(async { Some(42) });
+        let mut startup = Box::pin(startup(
+            async { receive.await.unwrap() },
+            metadata.as_mut(),
+            false,
+        ));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut startup)
+                .await
+                .is_err()
+        );
+        send.send("stream").unwrap();
+        assert_eq!(startup.await, ("stream", Some(42), false));
     }
 }

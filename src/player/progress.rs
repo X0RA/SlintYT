@@ -1,6 +1,6 @@
 //! Account-scoped YouTube playback metadata and watch reporting. Signed URLs,
 //! credentials and responses stay in memory and never enter logs or disk caches.
-use anyhow::{Result, anyhow, ensure};
+use anyhow::{Result, anyhow};
 use reqwest::{
     Url,
     header::{AUTHORIZATION, COOKIE, HeaderMap, HeaderValue},
@@ -29,8 +29,136 @@ const METADATA_TIMEOUT: Duration = Duration::from_secs(10);
 const RETRY_INTERVAL: Duration = Duration::from_secs(15);
 use zeroize::Zeroizing;
 
+/// Fixed categories only: never retain server messages, URLs or credentials.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unavailable {
+    NoClient,
+    SessionExpired,
+    LoginRequired,
+    Forbidden,
+    NotPlayable,
+    Transient,
+    Mismatch,
+    NoTracking,
+    Recovery(crate::youtube::recovery::Failure),
+}
+
+impl Unavailable {
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::SessionExpired | Self::Recovery(crate::youtube::recovery::Failure::Browser) => {
+                "YouTube progress paused: your browser session expired. Reconnect the profile."
+            }
+            Self::Recovery(crate::youtube::recovery::Failure::Pasted) => {
+                "YouTube progress paused: replace this profile's pasted cookies."
+            }
+            Self::Recovery(crate::youtube::recovery::Failure::AccountChanged) => {
+                "YouTube progress paused: the browser account or channel changed or could not be verified. Reconnect the profile."
+            }
+            Self::LoginRequired => {
+                "YouTube asked to confirm sign-in; progress isn't being saved for this video."
+            }
+            _ => "YouTube progress is unavailable for this playback.",
+        }
+    }
+
+    fn request(error: rustypipe::error::Error) -> Self {
+        use rustypipe::error::Error;
+        if crate::youtube::recovery::is_auth_error(&error) {
+            return Self::SessionExpired;
+        }
+        match error {
+            Error::HttpStatus(403, _) => Self::Forbidden,
+            Error::HttpStatus(429 | 500..=599, _) | Error::Http(_) => Self::Transient,
+            Error::HttpStatus(_, _) | Error::Auth(_) => Self::NotPlayable,
+            _ => Self::Transient,
+        }
+    }
+}
+
+impl std::fmt::Display for Unavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message())
+    }
+}
+impl std::error::Error for Unavailable {}
+
+pub type RecoveryFuture = std::pin::Pin<
+    Box<
+        dyn std::future::Future<Output = std::result::Result<(), crate::youtube::recovery::Failure>>
+            + Send,
+    >,
+>;
+pub type Recover = Arc<dyn Fn() -> RecoveryFuture + Send + Sync>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PingError {
+    SessionExpired,
+    Failed,
+}
+
+impl PingError {
+    fn status(status: u16) -> std::result::Result<(), Self> {
+        match status {
+            200..=299 => Ok(()),
+            401 => Err(Self::SessionExpired),
+            _ => Err(Self::Failed),
+        }
+    }
+}
+
+#[derive(Default)]
+pub(super) struct RetryBudget {
+    transients: usize,
+    recovered: bool,
+}
+
+/// Retry only the metadata, never the stream or resume position. The caller
+/// owns cancellation and may keep waiting for an external credential refresh.
+pub(super) async fn attach_with_retry<T, Lookup, LookupFuture, RecoverFn, RecoverFuture>(
+    mut outcome: std::result::Result<T, Unavailable>,
+    mut lookup: Lookup,
+    mut recover: RecoverFn,
+    active: impl Fn() -> bool,
+    backoffs: [Duration; 2],
+    budget: &mut RetryBudget,
+) -> Option<std::result::Result<T, Unavailable>>
+where
+    Lookup: FnMut() -> LookupFuture,
+    LookupFuture: std::future::Future<Output = std::result::Result<T, Unavailable>>,
+    RecoverFn: FnMut() -> RecoverFuture,
+    RecoverFuture:
+        std::future::Future<Output = std::result::Result<(), crate::youtube::recovery::Failure>>,
+{
+    loop {
+        if !active() {
+            return None;
+        }
+        match outcome {
+            Err(Unavailable::SessionExpired) if !budget.recovered => {
+                budget.recovered = true;
+                if let Err(reason) = recover().await {
+                    return active().then_some(Err(Unavailable::Recovery(reason)));
+                }
+            }
+            Err(Unavailable::Transient) if budget.transients < backoffs.len() => {
+                let delay = backoffs[budget.transients];
+                budget.transients += 1;
+                tokio::time::sleep(delay).await;
+            }
+            _ => return Some(outcome),
+        }
+        if !active() {
+            return None;
+        }
+        outcome = lookup().await;
+    }
+}
+
 pub struct Client {
     credentials: RwLock<Credentials>,
+    revision: AtomicU64,
+    recover: RwLock<Option<Recover>>,
     http: reqwest::Client,
     reports: Arc<tokio::sync::Mutex<()>>,
     /// Videos whose reporter is still sending, with a count per open viewing.
@@ -82,6 +210,8 @@ impl Client {
                 cookie: super::resolve::cookie_header(cookies)?,
                 headers,
             }),
+            revision: AtomicU64::new(0),
+            recover: RwLock::new(None),
             http: reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .timeout(Duration::from_secs(5))
@@ -101,9 +231,16 @@ impl Client {
     /// Keep pending reporters alive while giving their next ping fresh cookies.
     pub(super) fn refresh_from(&self, refreshed: &Self) {
         let credentials = refreshed.credentials.read().unwrap().clone();
-        *self.credentials.write().unwrap() = credentials;
+        let mut current = self.credentials.write().unwrap();
+        *current = credentials;
+        self.revision.fetch_add(1, Ordering::AcqRel);
     }
 
+    pub fn set_recoverer(&self, recover: Option<Recover>) {
+        *self.recover.write().unwrap() = recover;
+    }
+
+    #[cfg(test)]
     fn pipe(&self) -> RustyPipe {
         self.credentials.read().unwrap().pipe.clone()
     }
@@ -111,14 +248,23 @@ impl Client {
     /// `resume` waits (bounded) for this video's earlier viewing to finish
     /// reporting, so YouTube returns the position from its final report.
     /// Other videos and stream refreshes never wait on reports.
-    pub async fn info(&self, id: &str, resume: bool) -> Result<Info> {
-        ensure!(super::resolve::valid_id(id), "Invalid video");
+    pub async fn info(&self, id: &str, resume: bool) -> std::result::Result<Info, Unavailable> {
+        if !super::resolve::valid_id(id) {
+            return Err(Unavailable::Mismatch);
+        }
         if resume {
             let _ = tokio::time::timeout(REPORT_WAIT, self.settled(id)).await;
         }
+        let (pipe, revision) = {
+            let credentials = self.credentials.read().unwrap();
+            (
+                credentials.pipe.clone(),
+                self.revision.load(Ordering::Acquire),
+            )
+        };
         let raw = tokio::time::timeout(
             METADATA_TIMEOUT,
-            self.pipe().query().authenticated().raw(
+            pipe.query().authenticated().raw(
                 ClientType::Desktop,
                 "player",
                 &json!({
@@ -127,15 +273,15 @@ impl Client {
             ),
         )
         .await
-        .map_err(|_| anyhow!("Timed out fetching playback metadata"))?
-        .map_err(|_| anyhow!("Could not fetch playback metadata"))?;
-        let value: Value =
-            serde_json::from_str(&raw).map_err(|_| anyhow!("Invalid playback metadata"))?;
-        ensure!(
-            value["videoDetails"]["videoId"].as_str() == Some(id),
-            "Unexpected playback metadata"
-        );
-        Ok(Info::parse(&value))
+        .map_err(|_| Unavailable::Transient)?;
+        // A concurrent feed recovery may have replaced the cookies during this
+        // request. Discard the old response, including any old auth failure.
+        if revision != self.revision.load(Ordering::Acquire) {
+            return Err(Unavailable::Transient);
+        }
+        let raw = raw.map_err(Unavailable::request)?;
+        let value: Value = serde_json::from_str(&raw).map_err(|_| Unavailable::Transient)?;
+        Info::classify(&value, id)
     }
 
     async fn settled(&self, id: &str) {
@@ -151,7 +297,7 @@ impl Client {
         }
     }
 
-    async fn ping(&self, url: Url) -> Result<()> {
+    async fn ping(&self, url: Url) -> std::result::Result<(), PingError> {
         #[cfg(test)]
         let diagnostic = if std::env::var_os("SLINTYT_TEST_PROGRESS").is_some() {
             Some((
@@ -165,7 +311,8 @@ impl Client {
         };
         let credentials = self.credentials.read().unwrap().clone();
         let mut headers = credentials.headers;
-        let mut cookie = HeaderValue::from_str(&credentials.cookie)?;
+        let mut cookie =
+            HeaderValue::from_str(&credentials.cookie).map_err(|_| PingError::Failed)?;
         cookie.set_sensitive(true);
         headers.insert(COOKIE, cookie);
         if let Some(sapisid) = credentials
@@ -179,7 +326,8 @@ impl Client {
             digest.update(sapisid);
             digest.update(" https://www.youtube.com");
             let mut auth =
-                HeaderValue::from_str(&format!("SAPISIDHASH {now}_{:x}", digest.finalize()))?;
+                HeaderValue::from_str(&format!("SAPISIDHASH {now}_{:x}", digest.finalize()))
+                    .map_err(|_| PingError::Failed)?;
             auth.set_sensitive(true);
             headers.insert(AUTHORIZATION, auth);
         }
@@ -191,11 +339,8 @@ impl Client {
                 result.as_ref().ok().map(|r| r.status().as_u16())
             );
         }
-        ensure!(
-            result.is_ok_and(|r| r.status().is_success()),
-            "YouTube progress update failed"
-        );
-        Ok(())
+        let response = result.map_err(|_| PingError::Failed)?;
+        PingError::status(response.status().as_u16())
     }
 }
 
@@ -259,6 +404,33 @@ fn seconds(value: &Value) -> Option<f64> {
 }
 
 impl Info {
+    fn classify(value: &Value, id: &str) -> std::result::Result<Self, Unavailable> {
+        crate::youtube::recovery::check_response(value).map_err(|_| Unavailable::SessionExpired)?;
+        if let Some(code) = value.pointer("/error/code").and_then(Value::as_u64) {
+            return Err(match code {
+                403 => Unavailable::Forbidden,
+                429 | 500..=599 => Unavailable::Transient,
+                _ => Unavailable::NotPlayable,
+            });
+        }
+        match value
+            .pointer("/playabilityStatus/status")
+            .and_then(Value::as_str)
+        {
+            Some("OK") | None => {}
+            Some("LOGIN_REQUIRED") => return Err(Unavailable::LoginRequired),
+            Some(_) => return Err(Unavailable::NotPlayable),
+        }
+        if value["videoDetails"]["videoId"].as_str() != Some(id) {
+            return Err(Unavailable::Mismatch);
+        }
+        let info = Self::parse(value);
+        if info.playback.is_none() || info.watchtime.is_none() {
+            return Err(Unavailable::NoTracking);
+        }
+        Ok(info)
+    }
+
     fn parse(value: &Value) -> Self {
         let duration = seconds(&value["videoDetails"]["lengthSeconds"]).unwrap_or(0.);
         let resume = seconds(&value["playerConfig"]["playbackStartConfig"]["startSeconds"])
@@ -300,7 +472,7 @@ fn tracking_url(value: &Value, kind: &str) -> Option<Url> {
 }
 
 pub type Tasks = Arc<Mutex<Vec<JoinHandle<()>>>>;
-pub type Status = Arc<dyn Fn(bool) + Send + Sync>;
+pub type Status = Arc<dyn Fn(std::result::Result<(), Unavailable>) + Send + Sync>;
 
 #[derive(Clone, Copy)]
 pub struct Sample {
@@ -355,21 +527,44 @@ impl Reporter {
             // Prevent a delayed final report from overwriting a newer viewing.
             let _order = client.reports.lock().await;
             let mut announced = false;
+            let mut recovery_attempted = false;
+            let mut recovery: Option<RecoveryFuture> = None;
+            let mut recovery_failure = None;
             let mut missed = Vec::new();
             let mut failed: Option<Report> = None;
             loop {
-                let mut report = match failed.take() {
-                    // Keep retrying while the viewing is open, even when paused.
-                    // Once closed, the final report has had its attempts.
-                    Some(last) => match tokio::time::timeout(retry, receiver.recv()).await {
-                        Ok(Some(next)) => next,
-                        Ok(None) => break,
-                        Err(_) => last,
-                    },
-                    None => match receiver.recv().await {
-                        Some(report) => report,
-                        None => break,
-                    },
+                let report = {
+                    let next = async {
+                        match failed.take() {
+                            // Close cancels the recovery waiter, never delays final reporting.
+                            Some(last) => {
+                                match tokio::time::timeout(retry, receiver.recv()).await {
+                                    Ok(next) => next,
+                                    Err(_) => Some(last),
+                                }
+                            }
+                            None => receiver.recv().await,
+                        }
+                    };
+                    tokio::pin!(next);
+                    loop {
+                        tokio::select! {
+                            report = &mut next => break report,
+                            result = async {
+                                match &mut recovery {
+                                    Some(future) => future.await,
+                                    None => std::future::pending().await,
+                                }
+                            } => {
+                                recovery = None;
+                                recovery_failure = result.err().map(Unavailable::Recovery);
+                                if let Some(reason) = recovery_failure { status(Err(reason)); }
+                            }
+                        }
+                    }
+                };
+                let Some(mut report) = report else {
+                    break;
                 };
                 while let Ok(mut next) = receiver.try_recv() {
                     next.segments.splice(0..0, report.segments);
@@ -386,20 +581,29 @@ impl Reporter {
                     if attempt > 0 {
                         tokio::time::sleep(Duration::from_millis(300)).await;
                     }
-                    if !announced {
-                        announced = client
-                            .ping(report.url(&playback, &cpn, false))
-                            .await
-                            .is_ok();
-                    }
-                    if announced
-                        && client
-                            .ping(report.url(&watchtime, &cpn, true))
-                            .await
-                            .is_ok()
-                    {
+                    let result = if !announced {
+                        let result = client.ping(report.url(&playback, &cpn, false)).await;
+                        announced = result.is_ok();
+                        result
+                    } else {
+                        Ok(())
+                    };
+                    let result = match result {
+                        Ok(()) => client.ping(report.url(&watchtime, &cpn, true)).await,
+                        Err(error) => Err(error),
+                    };
+                    if result.is_ok() {
                         succeeded = true;
                         break;
+                    }
+                    if result == Err(PingError::SessionExpired) && !recovery_attempted {
+                        recovery_attempted = true;
+                        recovery = client
+                            .recover
+                            .read()
+                            .unwrap()
+                            .as_ref()
+                            .map(|recover| recover());
                     }
                 }
                 if succeeded {
@@ -411,7 +615,11 @@ impl Reporter {
                         ..report
                     });
                 }
-                status(succeeded);
+                status(if succeeded {
+                    Ok(())
+                } else {
+                    Err(recovery_failure.unwrap_or(Unavailable::Transient))
+                });
             }
         });
         let mut jobs = self.tasks.lock().unwrap();
@@ -437,12 +645,23 @@ pub struct Tracker {
 }
 
 impl Tracker {
+    pub fn attach(current: &mut Option<Self>, replacement: Option<Self>) -> bool {
+        let Some(mut replacement) = replacement else {
+            return false;
+        };
+        if let Some(pending) = current.take() {
+            replacement.inherit_samples(pending);
+        }
+        *current = Some(replacement);
+        true
+    }
+
     pub fn new(
         client: Arc<Client>,
         info: Info,
         runtime: Handle,
         tasks: &Tasks,
-        status: impl Fn(bool) + Send + Sync + 'static,
+        status: impl Fn(std::result::Result<(), Unavailable>) + Send + Sync + 'static,
     ) -> Option<Self> {
         let reporter = Reporter {
             client,
@@ -708,6 +927,183 @@ impl Report {
 mod tests {
     use super::*;
 
+    fn metadata_fixture() -> Value {
+        json!({
+            "playabilityStatus": {"status": "OK"},
+            "videoDetails": {"videoId": "abcdefghijk", "lengthSeconds": "600"},
+            "playbackTracking": {
+                "videostatsPlaybackUrl": {"baseUrl": "https://www.youtube.com/api/stats/playback"},
+                "videostatsWatchtimeUrl": {"baseUrl": "https://www.youtube.com/api/stats/watchtime"}
+            }
+        })
+    }
+
+    #[test]
+    fn metadata_failures_are_classified_without_response_text() {
+        use Unavailable::*;
+        let cases = [
+            (
+                json!({"responseContext":{"mainAppWebResponseContext":{"loggedOut":true}}}),
+                SessionExpired,
+            ),
+            (json!({"error":{"code":401}}), SessionExpired),
+            (json!({"error":{"code":403}}), Forbidden),
+            (json!({"error":{"code":429}}), Transient),
+            (json!({"error":{"code":503}}), Transient),
+            (
+                json!({"playabilityStatus":{"status":"LOGIN_REQUIRED"}}),
+                LoginRequired,
+            ),
+            (
+                json!({"playabilityStatus":{"status":"UNPLAYABLE"}}),
+                NotPlayable,
+            ),
+            (json!({"videoDetails":{"videoId":"other-video"}}), Mismatch),
+        ];
+        for (mut value, expected) in cases {
+            value["reason"] = json!("synthetic-private-marker");
+            let reason = Info::classify(&value, "abcdefghijk").err().unwrap();
+            assert_eq!(reason, expected);
+            assert!(!format!("{reason:?} {reason}").contains("synthetic-private-marker"));
+        }
+        let mut value = metadata_fixture();
+        assert!(Info::classify(&value, "abcdefghijk").is_ok());
+        value["playbackTracking"]["videostatsWatchtimeUrl"]["baseUrl"] =
+            json!("https://example.com/api/stats/watchtime");
+        assert_eq!(
+            Info::classify(&value, "abcdefghijk").err(),
+            Some(NoTracking)
+        );
+        value["playbackTracking"] = Value::Null;
+        assert_eq!(
+            Info::classify(&value, "abcdefghijk").err(),
+            Some(NoTracking)
+        );
+        for (status, expected) in [
+            (401, SessionExpired),
+            (403, Forbidden),
+            (429, Transient),
+            (503, Transient),
+        ] {
+            let reason = Unavailable::request(rustypipe::error::Error::HttpStatus(
+                status,
+                "synthetic-private-marker".into(),
+            ));
+            assert_eq!(reason, expected);
+            assert!(!format!("{reason:?} {reason}").contains("synthetic-private-marker"));
+        }
+    }
+
+    #[tokio::test]
+    async fn transient_metadata_retries_are_bounded_and_attach_on_success() {
+        use std::sync::atomic::AtomicUsize;
+        for succeeds in [true, false] {
+            let calls = AtomicUsize::new(0);
+            let result = attach_with_retry(
+                Err(Unavailable::Transient),
+                || async {
+                    let call = calls.fetch_add(1, Ordering::Relaxed);
+                    if succeeds && call == 1 {
+                        Ok(42)
+                    } else {
+                        Err(Unavailable::Transient)
+                    }
+                },
+                || async { panic!("Transient errors must not reimport cookies") },
+                || true,
+                [Duration::ZERO; 2],
+                &mut RetryBudget::default(),
+            )
+            .await;
+            assert_eq!(calls.load(Ordering::Relaxed), 2);
+            assert_eq!(
+                result,
+                Some(if succeeds {
+                    Ok(42)
+                } else {
+                    Err(Unavailable::Transient)
+                })
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn expired_metadata_recovers_once_using_replacement_credentials() {
+        use std::sync::atomic::AtomicUsize;
+        for expires_again in [true, false] {
+            let credential = AtomicUsize::new(1);
+            let calls = AtomicUsize::new(0);
+            let result = attach_with_retry(
+                Err(Unavailable::SessionExpired),
+                || async {
+                    assert_eq!(credential.load(Ordering::Relaxed), 2);
+                    if expires_again {
+                        Err(Unavailable::SessionExpired)
+                    } else {
+                        Ok(42)
+                    }
+                },
+                || async {
+                    calls.fetch_add(1, Ordering::Relaxed);
+                    credential.store(2, Ordering::Relaxed);
+                    Ok(())
+                },
+                || true,
+                [Duration::ZERO; 2],
+                &mut RetryBudget::default(),
+            )
+            .await;
+            assert_eq!(calls.load(Ordering::Relaxed), 1);
+            assert_eq!(
+                result,
+                Some(if expires_again {
+                    Err(Unavailable::SessionExpired)
+                } else {
+                    Ok(42)
+                })
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn stale_epoch_during_recovery_prevents_metadata_lookup_or_attach() {
+        use std::sync::atomic::AtomicBool;
+        let active = AtomicBool::new(true);
+        let result = attach_with_retry::<(), _, _, _, _>(
+            Err(Unavailable::SessionExpired),
+            || async { panic!("Stale video must not fetch or attach") },
+            || async {
+                active.store(false, Ordering::Release);
+                Ok(())
+            },
+            || active.load(Ordering::Acquire),
+            [Duration::ZERO; 2],
+            &mut RetryBudget::default(),
+        )
+        .await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn permission_and_missing_tracking_failures_never_refresh_or_retry() {
+        for reason in [
+            Unavailable::Forbidden,
+            Unavailable::LoginRequired,
+            Unavailable::NoTracking,
+        ] {
+            let result = attach_with_retry::<(), _, _, _, _>(
+                Err(reason),
+                || async { panic!("Terminal metadata failure must not retry") },
+                || async { panic!("Permission errors must not reimport cookies") },
+                || true,
+                [Duration::ZERO; 2],
+                &mut RetryBudget::default(),
+            )
+            .await;
+            assert_eq!(result, Some(Err(reason)));
+        }
+    }
+
     fn sample(position: f64, paused: bool) -> Sample {
         Sample {
             position,
@@ -736,8 +1132,11 @@ mod tests {
         pending.observe(sample(20., false), now + Duration::from_secs(3));
         pending.observe(sample(22., false), now + Duration::from_secs(5));
         pending.flush(true);
-        let (mut tracker, mut reports) = test_tracker();
-        tracker.inherit_samples(pending);
+        let mut current = Some(pending);
+        assert!(!Tracker::attach(&mut current, None));
+        assert!(!Tracker::attach(&mut current, None));
+        let (tracker, mut reports) = test_tracker();
+        assert!(Tracker::attach(&mut current, Some(tracker)));
         let report = reports.recv().await.unwrap();
         assert_eq!(report.segments, [(0., 2.), (20., 22.)]);
         assert_eq!(report.position, 22.);
@@ -756,6 +1155,8 @@ mod tests {
                 cookie: Zeroizing::new("SAPISID=test".into()),
                 headers: HeaderMap::new(),
             }),
+            revision: AtomicU64::new(0),
+            recover: RwLock::new(None),
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(5))
                 .build()
@@ -818,6 +1219,13 @@ mod tests {
 
     /// Records each stats request path and query; fails the first `failures` watchtime pings.
     async fn stats_server(failures: usize) -> (String, Arc<Mutex<Vec<String>>>) {
+        stats_server_status(failures, "503 Service Unavailable").await
+    }
+
+    async fn stats_server_status(
+        failures: usize,
+        failure_status: &'static str,
+    ) -> (String, Arc<Mutex<Vec<String>>>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
@@ -850,11 +1258,7 @@ mod tests {
                     failures -= 1;
                 }
                 log.lock().unwrap().push(line);
-                let status = if fail {
-                    "503 Service Unavailable"
-                } else {
-                    "200 OK"
-                };
+                let status = if fail { failure_status } else { "200 OK" };
                 let _ = socket
                     .write_all(
                         format!(
@@ -866,6 +1270,86 @@ mod tests {
             }
         });
         (base, seen)
+    }
+
+    #[tokio::test]
+    async fn reporter_recovers_only_once_for_401_and_never_for_403() {
+        use std::sync::atomic::AtomicUsize;
+        for (code, recoveries) in [("401 Unauthorized", 1), ("403 Forbidden", 0)] {
+            let (base, seen) = stats_server_status(4, code).await;
+            let client = test_client();
+            let attempts = Arc::new(AtomicUsize::new(0));
+            let attempts_hook = attempts.clone();
+            let weak = Arc::downgrade(&client);
+            client.set_recoverer(Some(Arc::new(move || {
+                let attempts = attempts_hook.clone();
+                let weak = weak.clone();
+                Box::pin(async move {
+                    attempts.fetch_add(1, Ordering::Relaxed);
+                    weak.upgrade().unwrap().refresh_from(&test_client());
+                    Ok(())
+                })
+            })));
+            let succeeded = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let result = succeeded.clone();
+            let reporter = test_reporter(
+                client.clone(),
+                &base,
+                Arc::new(move |status| {
+                    if status.is_ok() {
+                        result.store(true, Ordering::Release);
+                    }
+                }),
+            );
+            let mut tracker = Tracker::pending(Handle::current());
+            tracker.sender = Some(reporter.spawn());
+            tracker.reporter = Some(reporter);
+            let now = Instant::now();
+            tracker.observe(sample(10., false), now);
+            tracker.observe(sample(15., false), now + Duration::from_secs(5));
+            wait_until(|| succeeded.load(Ordering::Acquire)).await;
+            assert_eq!(attempts.load(Ordering::Relaxed), recoveries);
+            assert_eq!(client.revision.load(Ordering::Acquire), recoveries as u64);
+            {
+                let seen = seen.lock().unwrap();
+                let last = seen.last().unwrap();
+                assert_eq!(query(last, "st").as_deref(), Some("10.000"));
+                assert_eq!(query(last, "et").as_deref(), Some("15.000"));
+            }
+            drop(tracker);
+            wait_until(|| client.pending.lock().unwrap().is_empty()).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn closing_reporter_does_not_wait_for_browser_recovery() {
+        let (base, _) = stats_server_status(100, "401 Unauthorized").await;
+        let client = test_client();
+        let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = started.clone();
+        client.set_recoverer(Some(Arc::new(move || {
+            let flag = flag.clone();
+            Box::pin(async move {
+                flag.store(true, Ordering::Release);
+                std::future::pending().await
+            })
+        })));
+        let reporter = test_reporter(client.clone(), &base, Arc::new(|_| {}));
+        let sender = reporter.spawn();
+        sender
+            .send(Report {
+                position: 15.,
+                duration: 600.,
+                elapsed: 5.,
+                playing: false,
+                final_report: true,
+                segments: vec![(10., 15.)],
+            })
+            .await
+            .unwrap();
+        wait_until(|| started.load(Ordering::Acquire)).await;
+        drop(sender);
+        wait_until(|| client.pending.lock().unwrap().is_empty()).await;
     }
 
     fn test_reporter(client: Arc<Client>, base: &str, status: Status) -> Reporter {
@@ -981,7 +1465,7 @@ mod tests {
         let reporter = test_reporter(
             client.clone(),
             &base,
-            Arc::new(move |ok| log.lock().unwrap().push(ok)),
+            Arc::new(move |result| log.lock().unwrap().push(result.is_ok())),
         );
         let mut tracker = Tracker::idle(Handle::current(), 600.);
         tracker.sender = Some(reporter.spawn());

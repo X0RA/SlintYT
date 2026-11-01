@@ -1,5 +1,7 @@
 //! Bounded recovery for read requests. Never retry account mutations here.
-use anyhow::{Result, bail};
+use anyhow::Result;
+#[cfg(test)]
+use anyhow::bail;
 use serde_json::Value;
 
 use crate::{browser::Selection, history::Account};
@@ -15,7 +17,7 @@ impl std::fmt::Display for SessionExpired {
 
 impl std::error::Error for SessionExpired {}
 
-pub(super) fn check_response(response: &Value) -> Result<()> {
+pub(crate) fn check_response(response: &Value) -> Result<()> {
     if response
         .pointer("/responseContext/mainAppWebResponseContext/loggedOut")
         .and_then(Value::as_bool)
@@ -32,38 +34,133 @@ pub(super) fn request_error(
     error: rustypipe::error::Error,
     message: &'static str,
 ) -> anyhow::Error {
-    if matches!(
-        error,
-        rustypipe::error::Error::Auth(rustypipe::error::AuthError::NoLogin)
-            | rustypipe::error::Error::HttpStatus(401, _)
-    ) {
+    if is_auth_error(&error) {
         SessionExpired.into()
     } else {
         anyhow::anyhow!(message)
     }
 }
 
+pub(crate) fn is_auth_error(error: &rustypipe::error::Error) -> bool {
+    matches!(
+        error,
+        rustypipe::error::Error::Auth(rustypipe::error::AuthError::NoLogin)
+            | rustypipe::error::Error::HttpStatus(401, _)
+    )
+}
+
+/// Recovery failures deliberately discard all underlying browser/server text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Failure {
+    Browser,
+    Pasted,
+    AccountChanged,
+}
+impl std::fmt::Display for Failure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Browser => "Could not refresh the browser session. Unlock your keyring, check your connection and reconnect the profile.",
+            Self::Pasted => "The pasted YouTube session has expired. Replace this profile's saved cookies with a fresh export.",
+            Self::AccountChanged => "The browser's YouTube account or channel has changed or could not be verified. Reconnect the profile to choose the account explicitly.",
+        })
+    }
+}
+impl std::error::Error for Failure {}
+
+use std::{
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
+use tokio::sync::watch;
+type Outcome<T> = Option<(Instant, std::result::Result<Arc<T>, Failure>)>;
+
+/// One bounded refresh task per session, shared by feed and playback callers.
+/// Cancelling a waiter does not cancel an import or prompt and start it again.
+/// Only the task owns the old session; cached replacements never point back.
+pub(crate) struct Recovery<T> {
+    state: Mutex<Option<watch::Receiver<Outcome<T>>>>,
+    refreshed_at: Option<Instant>,
+}
+impl<T> Default for Recovery<T> {
+    fn default() -> Self {
+        Self {
+            state: Mutex::new(None),
+            refreshed_at: None,
+        }
+    }
+}
+impl<T: Send + Sync + 'static> Recovery<T> {
+    pub fn replacement() -> Self {
+        Self {
+            refreshed_at: Some(Instant::now()),
+            ..Self::default()
+        }
+    }
+
+    pub async fn run(
+        &self,
+        refresh: impl std::future::Future<Output = std::result::Result<Arc<T>, Failure>>
+        + Send
+        + 'static,
+    ) -> std::result::Result<Arc<T>, Failure> {
+        let mut receiver = {
+            let mut state = self.state.lock().unwrap();
+            let expired = state.as_ref().is_some_and(|receiver| {
+                receiver.borrow().as_ref().is_some_and(|(at, result)| {
+                    result.is_err() && at.elapsed() >= Duration::from_secs(300)
+                })
+            });
+            if expired {
+                *state = None;
+            }
+            state
+                .get_or_insert_with(|| {
+                    let (sender, receiver) = watch::channel(None);
+                    if self
+                        .refreshed_at
+                        .is_some_and(|at| at.elapsed() < Duration::from_secs(60))
+                    {
+                        sender.send_replace(Some((Instant::now(), Err(Failure::Browser))));
+                    } else {
+                        tokio::spawn(async move {
+                            let result = tokio::time::timeout(Duration::from_secs(125), refresh)
+                                .await
+                                .unwrap_or(Err(Failure::Browser));
+                            sender.send_replace(Some((Instant::now(), result)));
+                        });
+                    }
+                    receiver
+                })
+                .clone()
+        };
+        loop {
+            if let Some((_, result)) = &*receiver.borrow_and_update() {
+                return result.clone();
+            }
+            if receiver.changed().await.is_err() {
+                return Err(Failure::Browser);
+            }
+        }
+    }
+}
+
 pub(super) fn check_source(selection: &Selection) -> Result<()> {
     if selection.pasted() {
-        bail!(
-            "The pasted YouTube session has expired. Replace this profile's saved cookies with a fresh export."
-        );
+        return Err(Failure::Pasted.into());
     }
     Ok(())
 }
 
 pub(super) fn check_account(previous: Option<&Account>, refreshed: Option<&Account>) -> Result<()> {
     if previous.is_none() || previous != refreshed {
-        bail!(
-            "The browser's YouTube account or channel has changed or could not be verified. Reconnect the profile to choose the account explicitly."
-        );
+        return Err(Failure::AccountChanged.into());
     }
     Ok(())
 }
 
-/// The worker owns one cancellable load at a time and publishes a replacement
-/// only if its navigation generation is still current. Return the replacement
-/// even if the retry fails, so later requests don't reuse the expired session.
+/// Return the replacement even if the retry fails, so later requests do not
+/// reuse expired credentials. The app worker checks the originating session
+/// before adoption and checks the navigation generation before showing results.
 pub(crate) async fn retry_once<S: Clone, T, Load, Refresh>(
     session: S,
     load: impl Fn(S) -> Load,
@@ -93,6 +190,74 @@ where
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn concurrent_recovery_survives_cancelled_waiter_and_shares_replacement() {
+        let recovery = Arc::new(Recovery::default());
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (started, wait) = tokio::sync::oneshot::channel();
+        let (finish, finished) = tokio::sync::oneshot::channel();
+        let first = tokio::spawn({
+            let recovery = recovery.clone();
+            let calls = calls.clone();
+            async move {
+                recovery
+                    .run(async move {
+                        calls.fetch_add(1, Ordering::Relaxed);
+                        let _ = started.send(());
+                        let _ = finished.await;
+                        Ok(Arc::new(42))
+                    })
+                    .await
+            }
+        });
+        wait.await.unwrap();
+        first.abort();
+        let second = recovery.run(async { panic!("Must share existing recovery") });
+        let third = recovery.run(async { panic!("Must share existing recovery") });
+        finish.send(()).unwrap();
+        let (second, third) = tokio::join!(second, third);
+        assert!(Arc::ptr_eq(&second.unwrap(), &third.unwrap()));
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn failure_is_cached_until_cooldown_expires() {
+        let recovery = Recovery::<u32>::default();
+        assert_eq!(
+            recovery.run(async { Err(Failure::Browser) }).await,
+            Err(Failure::Browser)
+        );
+        assert_eq!(
+            recovery
+                .run(async { panic!("Must respect cooldown") })
+                .await,
+            Err(Failure::Browser)
+        );
+        let (_, receiver) = watch::channel(Some((
+            Instant::now() - Duration::from_secs(301),
+            Err(Failure::Browser),
+        )));
+        *recovery.state.lock().unwrap() = Some(receiver);
+        assert_eq!(*recovery.run(async { Ok(Arc::new(42)) }).await.unwrap(), 42);
+    }
+
+    #[tokio::test]
+    async fn immediately_expired_replacement_does_not_prompt_again() {
+        let recovery = Recovery::<u32>::replacement();
+        assert_eq!(
+            recovery
+                .run(async { panic!("Replacement must not refresh immediately") })
+                .await,
+            Err(Failure::Browser)
+        );
+        assert_eq!(
+            recovery
+                .run(async { panic!("Failure must remain cached") })
+                .await,
+            Err(Failure::Browser)
+        );
+    }
 
     #[test]
     fn recovery_classifies_only_explicit_authentication_failures() {

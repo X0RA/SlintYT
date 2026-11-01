@@ -6,6 +6,7 @@ export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcru
 
 export component AppWindow inherits Window {
     title: "Video player preview";
+    property <int> progress-state: 0;
     width: 1100px; height: 720px;
     init => {
         Palette.color-scheme = ColorScheme.dark;
@@ -41,10 +42,21 @@ export component AppWindow inherits Window {
         }
         HorizontalLayout {
             Button { text: "Buffering"; clicked => { AppState.player-loading = false; AppState.player-buffering = true; } }
-            Button { text: "Progress error"; clicked => { AppState.player-progress-note = AppState.player-progress-note == "" ? "Could not sync watch progress to YouTube. Retrying…" : ""; } }
+            progress-error := Button {
+                text: "Progress error";
+                clicked => {
+                    root.progress-state = mod(root.progress-state + 1, 7);
+                    AppState.player-progress-note = root.progress-state == 1 ? "Could not sync watch progress to YouTube. Retrying…"
+                        : root.progress-state == 2 ? "YouTube progress paused: your browser session expired. Reconnect the profile."
+                        : root.progress-state == 3 ? "YouTube progress paused: replace this profile's pasted cookies."
+                        : root.progress-state == 4 ? "YouTube asked to confirm sign-in; progress isn't being saved for this video."
+                        : root.progress-state == 5 ? "YouTube progress paused: the browser account or channel changed or could not be verified. Reconnect the profile."
+                        : root.progress-state == 6 ? "YouTube progress is unavailable for this playback." : "";
+                }
+            }
             Button { text: "Ended"; clicked => { AppState.player-ended = true; AppState.player-position = AppState.player-duration; AppState.player-paused = true; } }
             Button { text: "Error"; clicked => { AppState.player-loading = false; AppState.player-buffering = false; AppState.player-error = "This video is unavailable. Check your connection and retry."; } }
-            Button { text: "Compact"; clicked => { root.width = 720px; root.height = 650px; AppState.player-title = "A very long video title that should elide without pushing the Back button off the screen"; } }
+            Button { text: "Compact"; clicked => { root.width = root.width == 720px ? 480px : 720px; root.height = 650px; AppState.player-title = "A very long video title that should elide without pushing the Back button off the screen"; } }
         }
         player := VideoPlayer {
             select-subtitle(index) => { AppState.player-subtitle-index = index; AppState.player-subtitle-note = ""; }

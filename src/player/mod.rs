@@ -27,6 +27,8 @@ pub struct Playback {
     engine: Option<Arc<Mpv>>,
     progress: RwLock<Option<Arc<progress::Client>>>,
     report_tasks: progress::Tasks,
+    progress_recover: RwLock<Option<progress::Recover>>,
+    progress_changed: tokio::sync::watch::Sender<u64>,
     cookies: RwLock<Option<Arc<str>>>,
     task: Mutex<Option<JoinHandle<()>>>,
     subtitle_task: Mutex<Option<JoinHandle<()>>>,
@@ -148,14 +150,15 @@ impl Drop for Playback {
 }
 
 impl Playback {
-    pub fn set_session(&self, session: &crate::youtube::Session) {
+    pub fn set_session(&self, session: &crate::youtube::Session, recover: progress::Recover) {
         self.set_cookies(session.playback_cookies());
         *self.progress.write().unwrap() = session.progress.clone();
+        self.set_progress_recoverer(Some(recover));
     }
 
     /// Same-account recovery must not interrupt a video opened while the feed
     /// was refreshing. Existing reporters pick up the replacement credentials.
-    pub fn refresh_session(&self, session: &crate::youtube::Session) {
+    pub fn refresh_session(&self, session: &crate::youtube::Session, recover: progress::Recover) {
         self.cancel_prefetch();
         self.cache.lock().unwrap().clear();
         *self.cookies.write().unwrap() = Some(session.playback_cookies());
@@ -165,6 +168,17 @@ impl Playback {
         } else {
             *progress = session.progress.clone();
         }
+        drop(progress);
+        self.set_progress_recoverer(Some(recover));
+        self.progress_changed
+            .send_modify(|revision| *revision = revision.wrapping_add(1));
+    }
+
+    fn set_progress_recoverer(&self, recover: Option<progress::Recover>) {
+        if let Some(client) = self.progress.read().unwrap().as_ref() {
+            client.set_recoverer(recover.clone());
+        }
+        *self.progress_recover.write().unwrap() = recover;
     }
 
     pub async fn shutdown(&self) {
@@ -190,6 +204,7 @@ impl Playback {
     /// Forgets the account entirely, used when its saved profile is removed.
     pub fn clear_session(&self) {
         self.cancel();
+        self.set_progress_recoverer(None);
         *self.progress.write().unwrap() = None;
         self.cache.lock().unwrap().clear();
         self.subtitle_choices.write().unwrap().clear();
@@ -198,6 +213,7 @@ impl Playback {
 
     pub fn set_cookies(&self, cookies: Arc<str>) {
         self.cancel();
+        self.set_progress_recoverer(None);
         *self.progress.write().unwrap() = None;
         self.cache.lock().unwrap().clear();
         self.subtitle_choices.write().unwrap().clear();
@@ -507,12 +523,14 @@ impl Playback {
         let selection_key = selection.cache_key();
         let progress_client = self.progress.read().unwrap().clone();
         let current_epoch = self.epoch.clone();
+        let mut progress_changes = self.progress_changed.subscribe();
+        let lookup_revision = AtomicU64::new(*progress_changes.borrow());
         *self.task.lock().unwrap() = Some(self.runtime.spawn(async move {
             let metadata = async {
-                match &progress_client {
-                    Some(client) => client.info(&id, restore).await.ok(),
-                    None => None,
-                }
+                Some(match &progress_client {
+                    Some(client) => client.info(&id, restore).await,
+                    None => Err(progress::Unavailable::NoClient),
+                })
             };
             let streams = async {
                 if let Some(key) = &start.quality {
@@ -565,11 +583,15 @@ impl Playback {
             let (result, info, pending_metadata) =
                 startup(streams, metadata.as_mut(), restore).await;
             let position = if restore {
-                info.as_ref().and_then(|info| info.resume).unwrap_or(0.) as f32
+                info.as_ref()
+                    .and_then(|info| info.as_ref().ok())
+                    .and_then(|info| info.resume)
+                    .unwrap_or(0.) as f32
             } else {
                 start.position
             };
-            let tracking = progress_client.clone().zip(info).map(Box::new);
+            // Attach through one path after Load, including an early success.
+            let tracking = None;
             // Only automatic picks for a new video report a codec fallback.
             let codec_notice = match &result {
                 Ok(media) if start.new_video && start.quality.is_none() => {
@@ -607,11 +629,6 @@ impl Playback {
                     Ok(media) => {
                         *owner.requested_position.lock().unwrap() = position;
                         app.global::<AppState>().set_player_position(position);
-                        if tracking.is_none() && !pending_metadata {
-                            app.global::<AppState>().set_player_progress_note(
-                                "YouTube progress is unavailable for this playback.".into(),
-                            );
-                        }
                         let loaded = media.source().and_then(|source| {
                             playback_commands
                                 .send(Command::Load {
@@ -641,6 +658,7 @@ impl Playback {
                     }
                 }
             });
+            let tracking_owner = owner.clone();
             let menus = async {
                 if !playable {
                     return;
@@ -690,20 +708,106 @@ impl Playback {
                 });
             };
             let tracking = async {
-                if pending_metadata {
-                    let info = metadata.await;
-                    let tracking = progress_client.clone().zip(info).map(Box::new);
-                    // Queue on Slint after Load, so fast metadata cannot attach to
-                    // the previous file. The worker also checks the load epoch.
-                    let _ = weak.upgrade_in_event_loop(move |app| {
-                        if commands::accepts(
-                            current_epoch.load(Ordering::Acquire),
-                            epoch,
-                            app.global::<AppState>().get_player_open(),
-                        ) {
-                            let _ = commands.send(Command::Tracking { epoch, tracking });
+                if !playable {
+                    return;
+                }
+                let mut outcome = if pending_metadata {
+                    metadata.await
+                } else {
+                    info
+                }
+                .unwrap_or(Err(progress::Unavailable::NoClient));
+                let mut client = progress_client.clone();
+                let mut budget = progress::RetryBudget::default();
+                loop {
+                    let Some(owner) = tracking_owner.upgrade() else {
+                        return;
+                    };
+                    if progress_changes.has_changed().unwrap_or(false) {
+                        lookup_revision
+                            .store(*progress_changes.borrow_and_update(), Ordering::Release);
+                        let current = owner.progress.read().unwrap().clone();
+                        outcome = match current {
+                            Some(client) => client.info(&id, false).await,
+                            None => Err(progress::Unavailable::NoClient),
+                        };
+                    }
+                    let active = || current_epoch.load(Ordering::Acquire) == epoch;
+                    let result = progress::attach_with_retry(
+                        outcome,
+                        || async {
+                            lookup_revision
+                                .store(*owner.progress_changed.borrow(), Ordering::Release);
+                            let current = owner.progress.read().unwrap().clone();
+                            match current {
+                                Some(client) => client.info(&id, false).await,
+                                None => Err(progress::Unavailable::NoClient),
+                            }
+                        },
+                        || async {
+                            let recover = owner.progress_recover.read().unwrap().clone();
+                            match recover {
+                                Some(recover) => recover().await,
+                                None => Err(crate::youtube::recovery::Failure::Browser),
+                            }
+                        },
+                        active,
+                        [
+                            std::time::Duration::from_secs(2),
+                            std::time::Duration::from_secs(6),
+                        ],
+                        &mut budget,
+                    )
+                    .await;
+                    let Some(result) = result else {
+                        return;
+                    };
+                    if progress_changes.has_changed().unwrap_or(false) {
+                        if *progress_changes.borrow() != lookup_revision.load(Ordering::Acquire) {
+                            outcome = result;
+                            continue;
                         }
-                    });
+                        progress_changes.borrow_and_update();
+                    }
+                    // Always pair newly fetched metadata with the current client.
+                    client = owner.progress.read().unwrap().clone().or(client);
+                    match result {
+                        Ok(info) => {
+                            let tracking = client.zip(Some(info)).map(Box::new);
+                            let _ = weak.upgrade_in_event_loop(move |app| {
+                                if commands::accepts(
+                                    current_epoch.load(Ordering::Acquire),
+                                    epoch,
+                                    app.global::<AppState>().get_player_open(),
+                                ) {
+                                    let _ = commands.send(Command::Tracking { epoch, tracking });
+                                }
+                            });
+                            return;
+                        }
+                        Err(reason) => commands::publish(
+                            &weak,
+                            current_epoch.clone(),
+                            epoch,
+                            commands::Update::ProgressUnavailable(reason),
+                        ),
+                    }
+                    // A later feed refresh can revive a stranded pending tracker.
+                    // No timed retries after exhaustion; only verified new credentials.
+                    drop(owner);
+                    if progress_changes.changed().await.is_err() || !active() {
+                        return;
+                    }
+                    // changed() marks the version seen; force a fresh lookup.
+                    lookup_revision.store(*progress_changes.borrow(), Ordering::Release);
+                    let Some(owner) = tracking_owner.upgrade() else {
+                        return;
+                    };
+                    let current = owner.progress.read().unwrap().clone();
+                    outcome = match current {
+                        Some(client) => client.info(&id, false).await,
+                        None => Err(progress::Unavailable::NoClient),
+                    };
                 }
             };
             tokio::join!(menus, tracking);
@@ -782,6 +886,8 @@ pub fn install(app: &AppWindow, runtime: Handle) -> Arc<Playback> {
         ),
         engine,
         progress: RwLock::new(None),
+        progress_recover: RwLock::new(None),
+        progress_changed: tokio::sync::watch::channel(0).0,
         report_tasks,
         cookies: RwLock::new(None),
         task: Mutex::new(None),

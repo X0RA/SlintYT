@@ -22,6 +22,11 @@ mod folders;
 mod shorts;
 
 enum Command {
+    SessionRecovered {
+        from: Arc<Session>,
+        to: Arc<Session>,
+        adopted: tokio::sync::oneshot::Sender<bool>,
+    },
     Start,
     Scan,
     ConnectIndex(usize, i32),
@@ -639,6 +644,78 @@ fn publish_saved_profiles(
     profiles
 }
 
+fn progress_recoverer(
+    session: &Arc<Session>,
+    sender: &mpsc::UnboundedSender<Command>,
+) -> crate::player::progress::Recover {
+    let session = Arc::downgrade(session);
+    let sender = sender.clone();
+    Arc::new(move || {
+        let session = session.clone();
+        let sender = sender.clone();
+        Box::pin(async move {
+            let from = session
+                .upgrade()
+                .ok_or(youtube::recovery::Failure::Browser)?;
+            let to = from.recover().await?;
+            let (adopted, wait) = tokio::sync::oneshot::channel();
+            sender
+                .send(Command::SessionRecovered { from, to, adopted })
+                .map_err(|_| youtube::recovery::Failure::Browser)?;
+            match tokio::time::timeout(Duration::from_secs(5), wait).await {
+                Ok(Ok(true)) => Ok(()),
+                _ => Err(youtube::recovery::Failure::Browser),
+            }
+        })
+    })
+}
+
+fn replace_current<T>(
+    current: &mut Option<Arc<T>>,
+    from: &Arc<T>,
+    to: Arc<T>,
+    adopted: impl FnOnce(),
+) -> bool {
+    if current
+        .as_ref()
+        .is_some_and(|current| Arc::ptr_eq(current, &to))
+    {
+        return true;
+    }
+    if !current
+        .as_ref()
+        .is_some_and(|current| Arc::ptr_eq(current, from))
+    {
+        return false;
+    }
+    adopted();
+    *current = Some(to);
+    true
+}
+
+/// The app worker is the only publisher. Navigation does not invalidate a
+/// same-account refresh; replacing or removing the session always does.
+fn adopt_refreshed(
+    session: &mut Option<Arc<Session>>,
+    from: &Arc<Session>,
+    to: Arc<Session>,
+    player: &crate::player::Playback,
+    session_slot: &actions::SessionSlot,
+    sender: &mpsc::UnboundedSender<Command>,
+    watch_changes: &mut watch::Receiver<u64>,
+) -> bool {
+    let accepted = replace_current(session, from, to.clone(), || {
+        from.suspend();
+        *watch_changes = to.watch_updates();
+        player.refresh_session(&to, progress_recoverer(&to, sender));
+        *session_slot.write().unwrap() = Some(to.clone());
+    });
+    if !accepted {
+        to.suspend();
+    }
+    accepted
+}
+
 async fn worker(
     mut receiver: mpsc::UnboundedReceiver<Command>,
     sender: mpsc::UnboundedSender<Command>,
@@ -659,7 +736,13 @@ async fn worker(
     let mut feed = FeedPage::default();
     let mut pages = PageCache::default();
     let images = ThumbnailCache::default();
-    type LoadResult = (u64, View, Option<Arc<Session>>, anyhow::Result<FeedPage>);
+    type LoadResult = (
+        u64,
+        View,
+        Arc<Session>,
+        Option<Arc<Session>>,
+        anyhow::Result<FeedPage>,
+    );
     let mut active: Option<tokio::task::JoinHandle<LoadResult>> = None;
     let mut initial_feed = true;
     let mut active_epoch = 0;
@@ -673,15 +756,10 @@ async fn worker(
             } => {
                 active = None;
                 if result.is_err() { fail_page(&weak, "YouTube request could not finish. Please retry.".into(), generation.clone(), active_epoch); continue; }
-                if let Ok((epoch, view, refreshed, result)) = result {
+                if let Ok((epoch, view, from, refreshed, result)) = result {
+                    if let Some(refreshed) = refreshed
+                        && !adopt_refreshed(&mut session, &from, refreshed, &player, &session_slot, &sender, &mut watch_changes) { continue; }
                     if generation.load(Ordering::Relaxed) != epoch { continue; }
-                    if let Some(refreshed) = refreshed {
-                        if let Some(old) = &session { old.suspend(); }
-                        watch_changes = refreshed.watch_updates();
-                        player.refresh_session(&refreshed);
-                        *session_slot.write().unwrap() = Some(refreshed.clone());
-                        session = Some(refreshed);
-                    }
                     match result {
                         Ok(page) => {
                             initial_feed = false;
@@ -715,6 +793,20 @@ async fn worker(
         let mut refresh_history = false;
         let mut reload_pages = None;
         match command {
+            Command::SessionRecovered { from, to, adopted } => {
+                let accepted = adopt_refreshed(
+                    &mut session,
+                    &from,
+                    to,
+                    &player,
+                    &session_slot,
+                    &sender,
+                    &mut watch_changes,
+                );
+                let _ = adopted.send(accepted);
+                continue;
+            }
+
             Command::Start => match Store::new().and_then(|store| {
                 let settings = store.load_settings()?;
                 saved_profiles = publish_saved_profiles(&weak, &settings);
@@ -934,10 +1026,8 @@ async fn worker(
                 if let Some(task) = active.take() {
                     task.abort();
                 }
-                if let Some(old) = session.take()
-                    && let Some(bookmarks) = &old.bookmarks
-                {
-                    bookmarks.suspend();
+                if let Some(old) = session.take() {
+                    old.suspend();
                 }
                 *session_slot.write().unwrap() = None;
                 player.clear_session();
@@ -1136,13 +1226,12 @@ async fn worker(
                     watch_changes = new_session.watch_updates();
                     let note = new_session.watch_note();
                     let sync = new_session.sync_status();
-                    player.set_session(&new_session);
-                    if let Some(old) = &session
-                        && let Some(bookmarks) = &old.bookmarks
-                    {
-                        bookmarks.suspend();
+                    let new_session = Arc::new(new_session);
+                    player.set_session(&new_session, progress_recoverer(&new_session, &sender));
+                    if let Some(old) = &session {
+                        old.suspend();
                     }
-                    session = Some(Arc::new(new_session));
+                    session = Some(new_session);
                     *session_slot.write().unwrap() = session.clone();
                     if let Some(session) = session.clone() {
                         let send = sender.clone();
@@ -1260,7 +1349,7 @@ async fn worker(
                         let starting_page = starting_page.clone();
                         async move { fetch_pages(&session, &view, starting_page, count).await }
                     },
-                    || async { session.reconnect().await },
+                    || async { session.recover().await.map_err(anyhow::Error::from) },
                 )
                 .await;
                 if warm && let Ok(feed) = &result {
@@ -1270,7 +1359,7 @@ async fn worker(
                     )
                     .await;
                 }
-                (epoch, view, refreshed, result)
+                (epoch, view, session, refreshed, result)
             }));
         } else {
             fail(
@@ -1732,5 +1821,52 @@ mod profile_removal_tests {
         assert_eq!(saved.len(), 1);
         assert!(removal_selection(&rows, -1).is_none());
         assert!(removal_selection(&rows, 3).is_none());
+    }
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::replace_current;
+    use std::{cell::Cell, sync::Arc};
+
+    #[test]
+    fn recovery_adoption_is_idempotent_and_ignores_removed_or_switched_profiles() {
+        let original = Arc::new(42);
+        let replacement = Arc::new(42);
+        let mut current = Some(original.clone());
+        let publications = Cell::new(0);
+        let published = || publications.set(publications.get() + 1);
+        assert!(replace_current(
+            &mut current,
+            &original,
+            replacement.clone(),
+            published
+        ));
+        assert!(Arc::ptr_eq(current.as_ref().unwrap(), &replacement));
+        assert!(replace_current(
+            &mut current,
+            &original,
+            replacement.clone(),
+            published
+        ));
+        assert_eq!(publications.get(), 1);
+        let switched = Arc::new(42);
+        current = Some(switched.clone());
+        assert!(!replace_current(
+            &mut current,
+            &original,
+            replacement.clone(),
+            published
+        ));
+        assert!(Arc::ptr_eq(current.as_ref().unwrap(), &switched));
+        current = None;
+        assert!(!replace_current(
+            &mut current,
+            &original,
+            replacement,
+            published
+        ));
+        assert!(current.is_none());
+        assert_eq!(publications.get(), 1);
     }
 }

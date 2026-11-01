@@ -52,7 +52,7 @@ pub enum Command {
 pub(super) enum Update {
     Loaded,
     Progress(bool),
-    ProgressUnavailable,
+    ProgressUnavailable(super::progress::Unavailable),
     Paused(bool),
     Position(f64),
     Seeked(f64),
@@ -145,9 +145,9 @@ pub(super) fn publish(
             super::media_keys::position(seconds);
         }
         match update {
-            Update::ProgressUnavailable => state.set_player_progress_note(
-                "YouTube progress is unavailable for this playback.".into(),
-            ),
+            Update::ProgressUnavailable(reason) => {
+                state.set_player_progress_note(reason.message().into())
+            }
             Update::Progress(ok) => state.set_player_progress_note(
                 if ok {
                     ""
@@ -310,7 +310,11 @@ fn make_tracker(
             &status_weak,
             status_current.clone(),
             epoch,
-            Update::Progress(ok),
+            match ok {
+                Ok(()) => Update::Progress(true),
+                Err(super::progress::Unavailable::Transient) => Update::Progress(false),
+                Err(reason) => Update::ProgressUnavailable(reason),
+            },
         );
     })
 }
@@ -407,18 +411,9 @@ pub fn start(
                                 AUDIO_CHANNELS.store(0, Ordering::Release);
                                 engine.command("loadfile", &[&source, "replace"])?;
                                 events = Some((epoch, client, None));
-                                let has_metadata = tracking.is_some();
                                 tracker = make_tracker(
                                     tracking, &weak, &current, epoch, &runtime, &tasks,
                                 );
-                                if has_metadata && tracker.is_none() {
-                                    publish(
-                                        &weak,
-                                        current.clone(),
-                                        epoch,
-                                        Update::ProgressUnavailable,
-                                    );
-                                }
                                 if tracker.is_none() {
                                     tracker =
                                         Some(super::progress::Tracker::pending(runtime.clone()));
@@ -430,15 +425,10 @@ pub fn start(
                         }
                         _ if !events.as_ref().is_some_and(|(e, _, _)| *e == epoch) => Ok(()),
                         Command::Tracking { tracking, .. } => {
-                            let pending = tracker.take();
-                            tracker =
+                            let replacement =
                                 make_tracker(tracking, &weak, &current, epoch, &runtime, &tasks);
-                            if let Some(tracker) = &mut tracker {
-                                if let Some(pending) = pending {
-                                    tracker.inherit_samples(pending);
-                                }
-                            } else {
-                                publish(&weak, current.clone(), epoch, Update::ProgressUnavailable);
+                            if super::progress::Tracker::attach(&mut tracker, replacement) {
+                                publish(&weak, current.clone(), epoch, Update::Progress(true));
                             }
                             if loaded {
                                 sample_progress(&engine, &mut tracker);

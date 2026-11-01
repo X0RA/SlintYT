@@ -177,7 +177,7 @@ export component VideoPlayer inherits Rectangle {
                             }
                         }
                     }
-                    if AppState.player-progress-note != "" && root.overlay : Text {
+                    if AppState.player-progress-note != "" && root.overlay : progress-note := Text {
                         x: 24px; y: 70px; width: parent.width - 48px;
                         text: AppState.player-progress-note; color: #ffcf8a; font-size: 12px; wrap: word-wrap;
                         accessible-role: text; accessible-label: self.text;

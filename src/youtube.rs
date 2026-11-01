@@ -146,6 +146,7 @@ pub fn playlist_id(input: &str) -> Result<String> {
 
 pub struct Session {
     selection: Selection,
+    recovery: recovery::Recovery<Session>,
     account: Option<history::Account>,
     pub bookmarks: Option<Arc<crate::bookmarks::Bookmarks>>,
     pub bookmarks_error: String,
@@ -204,12 +205,29 @@ impl Session {
         tokio::time::timeout(Duration::from_secs(120), async {
             let (client, cookies, identity) = authenticate(&self.selection, || {}).await?;
             recovery::check_account(self.account.as_ref(), identity.account().as_ref())?;
-            Self::from_authenticated(&self.selection, client, cookies, identity)
-                .await
-                .map(Arc::new)
+            let mut replacement =
+                Self::from_authenticated(&self.selection, client, cookies, identity).await?;
+            replacement.recovery = recovery::Recovery::replacement();
+            Ok(Arc::new(replacement))
         })
         .await
         .context("Refreshing the browser session timed out. Unlock your keyring and reconnect.")?
+    }
+
+    pub(crate) async fn recover(
+        self: &Arc<Self>,
+    ) -> std::result::Result<Arc<Self>, recovery::Failure> {
+        let original = self.clone();
+        self.recovery
+            .run(async move {
+                original.reconnect().await.map_err(|error| {
+                    error
+                        .downcast_ref::<recovery::Failure>()
+                        .copied()
+                        .unwrap_or(recovery::Failure::Browser)
+                })
+            })
+            .await
     }
 
     pub(crate) fn suspend(&self) {
@@ -275,6 +293,7 @@ impl Session {
         };
         Ok(Self {
             selection: selection.clone(),
+            recovery: recovery::Recovery::default(),
             account: identity.account(),
             bookmarks,
             bookmarks_error,
@@ -1715,6 +1734,7 @@ mod tests {
         let (_, changes) = tokio::sync::watch::channel(0);
         let session = Session {
             selection,
+            recovery: recovery::Recovery::default(),
             account: None,
             bookmarks: None,
             bookmarks_error: String::new(),
@@ -1823,6 +1843,7 @@ mod tests {
         // cache and without launching an unbounded background history crawl.
         let session = Session {
             selection,
+            recovery: recovery::Recovery::default(),
             account: None,
             bookmarks: None,
             bookmarks_error: String::new(),

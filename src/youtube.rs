@@ -21,6 +21,7 @@ use crate::{
     watch::{UNKNOWN, UNWATCHED, WATCHED, WatchIndex},
 };
 mod pages;
+pub(crate) mod recovery;
 pub(crate) mod renderers;
 pub use pages::{ChannelInfo, avatar_url, item as video_item, number};
 
@@ -144,6 +145,8 @@ pub fn playlist_id(input: &str) -> Result<String> {
 }
 
 pub struct Session {
+    selection: Selection,
+    account: Option<history::Account>,
     pub bookmarks: Option<Arc<crate::bookmarks::Bookmarks>>,
     pub bookmarks_error: String,
     pub cache: Option<crate::cache::Cache>,
@@ -191,6 +194,37 @@ async fn authenticate(
 impl Session {
     pub async fn connect(selection: &Selection, session_read: impl FnOnce()) -> Result<Self> {
         let (client, cookies, identity) = authenticate(selection, session_read).await?;
+        Self::from_authenticated(selection, client, cookies, identity).await
+    }
+
+    /// Build a replacement before publishing it. Never silently switch accounts
+    /// if the browser's active account/channel changed since the initial import.
+    pub(crate) async fn reconnect(&self) -> Result<Arc<Self>> {
+        recovery::check_source(&self.selection)?;
+        tokio::time::timeout(Duration::from_secs(120), async {
+            let (client, cookies, identity) = authenticate(&self.selection, || {}).await?;
+            recovery::check_account(self.account.as_ref(), identity.account().as_ref())?;
+            Self::from_authenticated(&self.selection, client, cookies, identity)
+                .await
+                .map(Arc::new)
+        })
+        .await
+        .context("Refreshing the browser session timed out. Unlock your keyring and reconnect.")?
+    }
+
+    pub(crate) fn suspend(&self) {
+        self.watch_task.abort();
+        if let Some(bookmarks) = &self.bookmarks {
+            bookmarks.suspend();
+        }
+    }
+
+    async fn from_authenticated(
+        selection: &Selection,
+        client: RustyPipe,
+        cookies: String,
+        identity: IdentityCapture,
+    ) -> Result<Self> {
         let cache_store = identity
             .account()
             .and_then(|account| crate::cache::Cache::new(&account.filename()));
@@ -240,6 +274,8 @@ impl Session {
             None => (None, "Bookmarks need a verified YouTube account.".into()),
         };
         Ok(Self {
+            selection: selection.clone(),
+            account: identity.account(),
             bookmarks,
             bookmarks_error,
             progress,
@@ -364,7 +400,7 @@ impl Session {
             let result: Paginator<PlaylistItem> = if let Some(token) = continuation {
                 query.continuation(token, ContinuationEndpoint::Browse, visitor).await
             } else { query.saved_playlists().await }
-                .map_err(|_| anyhow::anyhow!("Your playlists could not be loaded. Check your connection or reconnect your browser."))?;
+                .map_err(|e| recovery::request_error(e, "Your playlists could not be loaded. Check your connection or reconnect your browser."))?;
             let mut page = Page {
                 videos: result
                     .items
@@ -431,9 +467,10 @@ impl Session {
                 .visitor_data_opt(visitor)
                 .raw(ClientType::Desktop, endpoint, &body)
                 .await
-                .map_err(|_| {
-                    anyhow::anyhow!(
-                        "YouTube could not load this page. Check your connection and retry."
+                .map_err(|e| {
+                    recovery::request_error(
+                        e,
+                        "YouTube could not load this page. Check your connection and retry.",
                     )
                 })?;
             if matches!(view, View::Playlist(_)) {
@@ -457,7 +494,7 @@ async fn history_page(
         .unwrap_or_else(|| json!({"browseId": "FEhistory"}));
     let response = client.query().authenticated().visitor_data_opt(visitor)
         .raw(ClientType::Desktop, "browse", &body).await
-        .map_err(|_| anyhow::anyhow!("YouTube history could not be loaded. Check your connection or reconnect your browser profile."))?;
+    .map_err(|e| recovery::request_error(e, "YouTube history could not be loaded. Check your connection or reconnect your browser profile."))?;
     parse_page(&response, ParseMode::History)
 }
 
@@ -662,17 +699,9 @@ fn parse_page(response: &str, mode: ParseMode) -> Result<Page> {
     };
     let response: Value =
         serde_json::from_str(response).context("YouTube returned an unreadable page.")?;
+    recovery::check_response(&response)?;
     if response.get("error").is_some() {
         bail!("YouTube rejected the request. Try reconnecting your browser profile.");
-    }
-    if response
-        .pointer("/responseContext/mainAppWebResponseContext/loggedOut")
-        .and_then(Value::as_bool)
-        == Some(true)
-    {
-        bail!(
-            "YouTube has signed this profile out. Sign in again in your browser, then reconnect."
-        );
     }
     if response["alerts"].as_array().is_some_and(|alerts| {
         alerts
@@ -1685,6 +1714,8 @@ mod tests {
         assert!(client.user_auth_set_cookie_txt(&cookies).await.is_ok());
         let (_, changes) = tokio::sync::watch::channel(0);
         let session = Session {
+            selection,
+            account: None,
             bookmarks: None,
             bookmarks_error: String::new(),
             progress: None,
@@ -1791,6 +1822,8 @@ mod tests {
         // Exercise production requests without changing the user's settings or
         // cache and without launching an unbounded background history crawl.
         let session = Session {
+            selection,
+            account: None,
             bookmarks: None,
             bookmarks_error: String::new(),
             progress: None,

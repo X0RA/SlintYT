@@ -659,7 +659,7 @@ async fn worker(
     let mut feed = FeedPage::default();
     let mut pages = PageCache::default();
     let images = ThumbnailCache::default();
-    type LoadResult = (u64, View, Result<FeedPage, String>);
+    type LoadResult = (u64, View, Option<Arc<Session>>, anyhow::Result<FeedPage>);
     let mut active: Option<tokio::task::JoinHandle<LoadResult>> = None;
     let mut initial_feed = true;
     let mut active_epoch = 0;
@@ -673,8 +673,15 @@ async fn worker(
             } => {
                 active = None;
                 if result.is_err() { fail_page(&weak, "YouTube request could not finish. Please retry.".into(), generation.clone(), active_epoch); continue; }
-                if let Ok((epoch, view, result)) = result {
+                if let Ok((epoch, view, refreshed, result)) = result {
                     if generation.load(Ordering::Relaxed) != epoch { continue; }
+                    if let Some(refreshed) = refreshed {
+                        if let Some(old) = &session { old.suspend(); }
+                        watch_changes = refreshed.watch_updates();
+                        player.refresh_session(&refreshed);
+                        *session_slot.write().unwrap() = Some(refreshed.clone());
+                        session = Some(refreshed);
+                    }
                     match result {
                         Ok(page) => {
                             initial_feed = false;
@@ -691,7 +698,7 @@ async fn worker(
                             if let Some(session) = session.as_ref() { shorts::lookup(&weak, session.clone(), &feed.videos); }
                             if let Some(session) = session.as_ref() { session.cache_feed(&view, &feed); }
                         }
-                        Err(message) => fail_page(&weak, message, generation.clone(), epoch),
+                        Err(error) => fail_page(&weak, error.to_string(), generation.clone(), epoch),
                     }
                 }
                 continue;
@@ -1246,7 +1253,16 @@ async fn worker(
             let warm = initial_feed;
             active_epoch = epoch;
             active = Some(tokio::spawn(async move {
-                let result = fetch_pages(&session, &view, starting_page, count).await;
+                let (refreshed, result) = youtube::recovery::retry_once(
+                    session.clone(),
+                    |session: Arc<Session>| {
+                        let view = view.clone();
+                        let starting_page = starting_page.clone();
+                        async move { fetch_pages(&session, &view, starting_page, count).await }
+                    },
+                    || async { session.reconnect().await },
+                )
+                .await;
                 if warm && let Ok(feed) = &result {
                     let _ = tokio::time::timeout(
                         Duration::from_secs(3),
@@ -1254,7 +1270,7 @@ async fn worker(
                     )
                     .await;
                 }
-                (epoch, view, result)
+                (epoch, view, refreshed, result)
             }));
         } else {
             fail(
@@ -1273,7 +1289,7 @@ async fn fetch_pages(
     view: &View,
     mut feed: FeedPage,
     count: usize,
-) -> Result<FeedPage, String> {
+) -> anyhow::Result<FeedPage> {
     for _ in 0..count {
         let token = feed.continuation.clone();
         let page = match tokio::time::timeout(
@@ -1283,11 +1299,10 @@ async fn fetch_pages(
         .await
         {
             Ok(Ok(page)) => page,
-            Ok(Err(error)) => return Err(error.to_string()),
-            Err(_) => return Err("YouTube took too long to respond. Please retry.".into()),
+            Ok(Err(error)) => return Err(error),
+            Err(_) => anyhow::bail!("YouTube took too long to respond. Please retry."),
         };
-        feed.accept(view, token.as_deref(), page)
-            .map_err(|e| e.to_string())?;
+        feed.accept(view, token.as_deref(), page)?;
         if feed.continuation.is_none() {
             break;
         }

@@ -181,6 +181,7 @@ impl Session {
                     .as_deref()
                     .and_then(|s| serde_json::from_str::<Value>(s).ok())
                 {
+                    recovery::check_response(&raw)?;
                     let content = super::browse_primary(&raw["contents"], super::ParseMode::Feed)
                         .unwrap_or(&raw);
                     let mut items = super::renderers::cards(content);
@@ -215,7 +216,9 @@ impl Session {
                 } else {
                     q.subscription_feed().await
                 }
-                .map_err(|_| anyhow::anyhow!("Could not load subscriptions. Please retry."))?;
+                .map_err(|e| {
+                    recovery::request_error(e, "Could not load subscriptions. Please retry.")
+                })?;
                 let mut page = videos(result);
                 for v in &mut page.videos {
                     v.group = if v.metadata.contains("hour")
@@ -236,7 +239,9 @@ impl Session {
                 } else {
                     q.subscriptions().await
                 }
-                .map_err(|_| anyhow::anyhow!("Could not load your channels. Please retry."))?;
+                .map_err(|e| {
+                    recovery::request_error(e, "Could not load your channels. Please retry.")
+                })?;
                 if token.is_none() {
                     self.known_subscriptions.write().unwrap().clear();
                 }
@@ -274,7 +279,9 @@ impl Session {
                             .await
                             .map(videos)
                     }
-                    .map_err(|_| anyhow::anyhow!("Could not load more channel content."));
+                    .map_err(|e| {
+                        recovery::request_error(e, "Could not load more channel content.")
+                    });
                 }
                 let params = if !query.is_empty() {
                     "EgZzZWFyY2jyBgQKAloA"
@@ -293,6 +300,9 @@ impl Session {
                 let mut raw = raw
                     .as_deref()
                     .and_then(|s| serde_json::from_str::<Value>(s).ok());
+                if let Some(raw) = &raw {
+                    recovery::check_response(raw)?;
+                }
                 if query.is_empty() && (*tab == 1 || *tab == 2) {
                     let action = raw.as_ref().and_then(|v| {
                         super::renderers::channel_tab_action(
@@ -322,10 +332,9 @@ impl Session {
                     }
                 }
                 let mut page = if *tab == 2 {
-                    let c = q
-                        .channel_playlists(id)
-                        .await
-                        .map_err(|_| anyhow::anyhow!("Could not load channel playlists."))?;
+                    let c = q.channel_playlists(id).await.map_err(|e| {
+                        recovery::request_error(e, "Could not load channel playlists.")
+                    })?;
                     let info = channel(&c);
                     let mut p = playlists(c.content);
                     p.channel_info = Some(info);
@@ -344,7 +353,9 @@ impl Session {
                         )
                         .await
                     }
-                    .map_err(|_| anyhow::anyhow!("Could not load this channel. Please retry."))?;
+                    .map_err(|e| {
+                        recovery::request_error(e, "Could not load this channel. Please retry.")
+                    })?;
                     let info = channel(&c);
                     let mut p = videos(c.content);
                     p.channel_info = Some(info);

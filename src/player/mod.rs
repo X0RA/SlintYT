@@ -153,6 +153,20 @@ impl Playback {
         *self.progress.write().unwrap() = session.progress.clone();
     }
 
+    /// Same-account recovery must not interrupt a video opened while the feed
+    /// was refreshing. Existing reporters pick up the replacement credentials.
+    pub fn refresh_session(&self, session: &crate::youtube::Session) {
+        self.cancel_prefetch();
+        self.cache.lock().unwrap().clear();
+        *self.cookies.write().unwrap() = Some(session.playback_cookies());
+        let mut progress = self.progress.write().unwrap();
+        if let (Some(current), Some(refreshed)) = (progress.as_ref(), session.progress.as_ref()) {
+            current.refresh_from(refreshed);
+        } else {
+            *progress = session.progress.clone();
+        }
+    }
+
     pub async fn shutdown(&self) {
         self.cancel_prefetch();
         if let Some(task) = self.subtitle_task.lock().unwrap().take() {

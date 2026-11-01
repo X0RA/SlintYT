@@ -11,7 +11,7 @@ use sha1::{Digest, Sha1};
 use std::{
     collections::HashMap,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, RwLock,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant},
@@ -30,14 +30,19 @@ const RETRY_INTERVAL: Duration = Duration::from_secs(15);
 use zeroize::Zeroizing;
 
 pub struct Client {
-    pub(super) pipe: RustyPipe,
+    credentials: RwLock<Credentials>,
     http: reqwest::Client,
-    cookie: Zeroizing<String>,
-    headers: HeaderMap,
     reports: Arc<tokio::sync::Mutex<()>>,
     /// Videos whose reporter is still sending, with a count per open viewing.
     pending: Mutex<HashMap<String, usize>>,
     settled: Notify,
+}
+
+#[derive(Clone)]
+struct Credentials {
+    pipe: RustyPipe,
+    cookie: Zeroizing<String>,
+    headers: HeaderMap,
 }
 
 #[derive(Clone)]
@@ -72,13 +77,15 @@ impl Client {
             HeaderValue::from_static("https://www.youtube.com/"),
         );
         Ok(Arc::new(Self {
-            pipe,
+            credentials: RwLock::new(Credentials {
+                pipe,
+                cookie: super::resolve::cookie_header(cookies)?,
+                headers,
+            }),
             http: reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .timeout(Duration::from_secs(5))
                 .build()?,
-            cookie: super::resolve::cookie_header(cookies)?,
-            headers,
             reports: report_order(
                 identity
                     .account()
@@ -88,6 +95,17 @@ impl Client {
             pending: Mutex::default(),
             settled: Notify::new(),
         }))
+    }
+
+    /// Called only after the replacement session's account/channel is verified.
+    /// Keep pending reporters alive while giving their next ping fresh cookies.
+    pub(super) fn refresh_from(&self, refreshed: &Self) {
+        let credentials = refreshed.credentials.read().unwrap().clone();
+        *self.credentials.write().unwrap() = credentials;
+    }
+
+    fn pipe(&self) -> RustyPipe {
+        self.credentials.read().unwrap().pipe.clone()
     }
 
     /// `resume` waits (bounded) for this video's earlier viewing to finish
@@ -100,7 +118,7 @@ impl Client {
         }
         let raw = tokio::time::timeout(
             METADATA_TIMEOUT,
-            self.pipe.query().authenticated().raw(
+            self.pipe().query().authenticated().raw(
                 ClientType::Desktop,
                 "player",
                 &json!({
@@ -145,11 +163,12 @@ impl Client {
         } else {
             None
         };
-        let mut headers = self.headers.clone();
-        let mut cookie = HeaderValue::from_str(&self.cookie)?;
+        let credentials = self.credentials.read().unwrap().clone();
+        let mut headers = credentials.headers;
+        let mut cookie = HeaderValue::from_str(&credentials.cookie)?;
         cookie.set_sensitive(true);
         headers.insert(COOKIE, cookie);
-        if let Some(sapisid) = self
+        if let Some(sapisid) = credentials
             .cookie
             .split(';')
             .find_map(|c| c.trim().strip_prefix("SAPISID="))
@@ -728,21 +747,73 @@ mod tests {
 
     fn test_client() -> Arc<Client> {
         Arc::new(Client {
-            pipe: RustyPipe::builder()
-                .storage(Box::new(crate::history::IdentityCapture::default()))
-                .no_reporter()
-                .build()
-                .unwrap(),
+            credentials: RwLock::new(Credentials {
+                pipe: RustyPipe::builder()
+                    .storage(Box::new(crate::history::IdentityCapture::default()))
+                    .no_reporter()
+                    .build()
+                    .unwrap(),
+                cookie: Zeroizing::new("SAPISID=test".into()),
+                headers: HeaderMap::new(),
+            }),
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(5))
                 .build()
                 .unwrap(),
-            cookie: Zeroizing::new("SAPISID=test".into()),
-            headers: HeaderMap::new(),
             reports: Arc::new(tokio::sync::Mutex::new(())),
             pending: Mutex::default(),
             settled: Notify::new(),
         })
+    }
+
+    #[tokio::test]
+    async fn recovery_updates_existing_reporters_without_losing_pending_reports() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = Url::parse(&format!(
+            "http://{}/api/stats/watchtime",
+            listener.local_addr().unwrap()
+        ))
+        .unwrap();
+        let server = tokio::spawn(async move {
+            for expected in ["first", "second"] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                let mut buffer = [0; 4096];
+                while !bytes.windows(4).any(|w| w == b"\r\n\r\n") {
+                    let n = socket.read(&mut buffer).await.unwrap();
+                    assert!(n > 0);
+                    bytes.extend_from_slice(&buffer[..n]);
+                }
+                let request = String::from_utf8(bytes).unwrap();
+                assert!(request.contains(&format!("cookie: SAPISID={expected}\r\n")));
+                assert!(request.contains(&format!("x-goog-authuser: {expected}\r\n")));
+                assert!(request.contains("authorization: SAPISIDHASH "));
+                socket
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .await
+                    .unwrap();
+            }
+        });
+        let client = test_client();
+        let reporter = client.clone();
+        let pending = Pending::new(reporter.clone(), "abcdefghijk");
+        for value in ["first", "second"] {
+            let refreshed = test_client();
+            {
+                let mut credentials = refreshed.credentials.write().unwrap();
+                credentials.cookie = Zeroizing::new(format!("SAPISID={value}"));
+                credentials
+                    .headers
+                    .insert("x-goog-authuser", HeaderValue::from_str(value).unwrap());
+            }
+            client.refresh_from(&refreshed);
+            assert_eq!(client.pending.lock().unwrap().get("abcdefghijk"), Some(&1));
+            reporter.ping(url.clone()).await.unwrap();
+        }
+        drop(pending);
+        assert!(client.pending.lock().unwrap().is_empty());
+        server.await.unwrap();
     }
 
     /// Records each stats request path and query; fails the first `failures` watchtime pings.
@@ -1077,7 +1148,7 @@ mod tests {
         let mut id = std::env::var("SLINTYT_TEST_VIDEO").unwrap_or_else(|_| "aqz-KE-bpKQ".into());
         if std::env::var_os("SLINTYT_TEST_EXISTING").is_some() {
             let raw = client
-                .pipe
+                .pipe()
                 .query()
                 .authenticated()
                 .raw(
@@ -1111,7 +1182,7 @@ mod tests {
             let mut found = pick(&serde_json::from_str::<Value>(&raw).unwrap());
             if found.is_none() {
                 let raw = client
-                    .pipe
+                    .pipe()
                     .query()
                     .authenticated()
                     .raw(
@@ -1126,7 +1197,7 @@ mod tests {
             id = found.expect("No progress entry found");
         }
         let raw = client
-            .pipe
+            .pipe()
             .query()
             .authenticated()
             .raw(ClientType::Desktop, "player", &json!({"videoId":id}))

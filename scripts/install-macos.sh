@@ -67,6 +67,8 @@ replace_app() (
     parent="$(dirname "$destination")"
     local lock="$parent/.SlintYT-install-lock"
     mkdir "$lock" || { echo "Another install is active. If none is, remove $lock and try again." >&2; exit 1; }
+    # Invoked indirectly by the EXIT trap below; ShellCheck misses this nested callback.
+    # shellcheck disable=SC2317
     cleanup_install() {
         local status=$?
         trap - EXIT HUP INT TERM

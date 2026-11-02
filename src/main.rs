@@ -4,6 +4,7 @@ mod app;
 mod bookmarks;
 mod browser;
 mod cache;
+mod comment_timestamps;
 mod config;
 mod cookies;
 mod feed;

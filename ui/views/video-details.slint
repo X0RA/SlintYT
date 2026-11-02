@@ -8,6 +8,10 @@ import { ActionButton } from "../components/action-button.slint";
 import { Avatar } from "../components/avatar.slint";
 import { VideoCard } from "../components/video-card.slint";
 export component VideoDetails inherits Rectangle {
+    pure callback format-comment(string) -> styled-text;
+    callback play-comment-timestamp(string);
+    format-comment(text) => { return AppState.format-comment(text); }
+    play-comment-timestamp(link) => { AppState.play-comment-timestamp(link); }
     private property <bool> expanded: false;
     private property <bool> save-open: false;
     private property <string> reply-id;
@@ -91,7 +95,7 @@ export component VideoDetails inherits Rectangle {
                             Text { text: item.author; color: Theme.text; font-size: 13px; font-weight: 600; }
                             Text { text: item.metadata; color: Theme.subtle; font-size: 13px; }
                         }
-                        Text { text: item.text; color: #d4d4d8; font-size: 14px; wrap: word-wrap; }
+                        StyledText { text: root.format-comment(item.text); default-color: #d4d4d8; default-font-size: 14px; link-color: #88b4ee; link-clicked(link) => { root.play-comment-timestamp(link); } }
                         HorizontalLayout { alignment: start; spacing: 4px; cross-axis-alignment: center;
                             ActionButton { height: 36px; icon-size: 16px; text: item.likes; icon: "like"; tip: item.liked ? "Unlike comment" : "Like comment"; quiet: true; active: item.liked; enabled: item.can-like && !AppState.action-busy; clicked => { AppState.toggle-comment-like(item.id); } }
                             ActionButton { height: 36px; text: "Reply"; quiet: true; clicked => { root.reply-id = root.reply-id == item.id ? "" : item.id; } }

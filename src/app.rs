@@ -135,6 +135,7 @@ pub fn wire(app: &AppWindow) -> (tokio::runtime::Runtime, Arc<crate::player::Pla
             }
         }
     });
+    ui.on_format_comment(|text| crate::comment_timestamps::format(&text));
     ui.on_matches(|name, query| name.to_lowercase().contains(&query.to_lowercase()));
     ui.on_channel_count(|rows, query, subscribed_only| {
         let query = query.to_lowercase();

@@ -34,6 +34,7 @@ pub enum Command {
     },
     Toggle(u64, bool),
     Seek(u64, f32),
+    SeekAndPlay(u64, f32),
     Volume(u64, f32),
     Speed(u64, f32),
     Mute(u64, bool),
@@ -354,6 +355,7 @@ pub fn start(
                         | Command::Load { epoch: e, .. }
                         | Command::Toggle(e, _)
                         | Command::Seek(e, _)
+                        | Command::SeekAndPlay(e, _)
                         | Command::Volume(e, _)
                         | Command::Speed(e, _)
                         | Command::Mute(e, _)
@@ -452,6 +454,14 @@ pub fn start(
                                 tracker.seek(true);
                             }
                             engine.command("seek", &[&seconds.to_string(), "absolute"])
+                        }
+                        Command::SeekAndPlay(_, seconds) => {
+                            if let Some(tracker) = &mut tracker {
+                                tracker.seek(true);
+                            }
+                            engine
+                                .command("seek", &[&seconds.to_string(), "absolute"])
+                                .and_then(|()| engine.set_property("pause", false))
                         }
                         Command::Volume(_, volume) => {
                             engine.set_property("volume", f64::from(volume))

@@ -1205,6 +1205,35 @@ pub fn install(app: &AppWindow, runtime: Handle) -> Arc<Playback> {
             ));
         }
     });
+    let (weak, owner) = (app.as_weak(), player.clone());
+    state.on_play_comment_timestamp(move |link| {
+        let Some(seconds) = link
+            .strip_prefix("comment-time:")
+            .and_then(|s| s.parse::<u32>().ok())
+        else {
+            return;
+        };
+        let (Some(app), Some(commands)) = (weak.upgrade(), &owner.commands) else {
+            return;
+        };
+        let state = app.global::<AppState>();
+        if !state.get_player_open()
+            || state.get_player_loading()
+            || !state.get_player_error().is_empty()
+        {
+            return;
+        }
+        let seconds = if state.get_player_duration() > 0. {
+            (seconds as f32).min(state.get_player_duration())
+        } else {
+            seconds as f32
+        };
+        let _ = commands.send(Command::SeekAndPlay(
+            owner.epoch.load(Ordering::Acquire),
+            seconds,
+        ));
+        state.set_scroll_reset(state.get_scroll_reset() + 1);
+    });
     let owner = player.clone();
     state.on_player_seek(move |seconds| {
         if seconds.is_finite()

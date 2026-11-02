@@ -17,7 +17,7 @@ export component AppWindow inherits Window {
         AppState.player-channel = "Linus Tech Tips"; AppState.player-channel-initials = "LT";
         AppState.player-stats = "1.2M views · 2 days ago";
         AppState.player-description = "This is a standalone video details preview.\nA longer description can expand and collapse.\nA third line of mock text.\nMore text to inspect the expanded state.";
-        AppState.comments = [{id:"mock",author:"@viewer",initials:"V",text:"A thoughtful comment with enough text to test wrapping across the available width.",metadata:"2 hours ago",likes:"42",can-like:true,replies:3}];
+        AppState.comments = [{id:"mock",author:"@viewer",initials:"V",text:"11:44 his brain works in such unique ways",metadata:"2 hours ago",likes:"42",can-like:true,replies:3}];
         AppState.recommendations = [{id:"abcdefghijk",title:"A recommended video",channel:"Workshop",initials:"W",metadata:"12K views · 1 day ago",duration:"12:34",thumbnail:@image-url("mock-thumbnail.svg")}];
     }
     VerticalLayout {
@@ -30,6 +30,9 @@ export component AppWindow inherits Window {
             Button { text: "Error"; clicked => { AppState.comments-error = "Could not load replies. Please retry."; AppState.comments-loading = false; } }
             Button { text: "Empty"; clicked => { AppState.comments = []; AppState.comments-error = ""; AppState.comments-loading = false; } }
         }
-        ScrollView { horizontal-scrollbar-policy: always-off; VideoDetails {} }
+        ScrollView { horizontal-scrollbar-policy: always-off; VideoDetails {
+            format-comment(text) => { return text == "11:44 his brain works in such unique ways" ? @markdown("[11:44](comment-time:704) his brain works in such unique ways") : @markdown("A mock comment with [0:00](comment-time:0) and [1:02:03](comment-time:3723), followed by enough text to test wrapping across the available width."); }
+            play-comment-timestamp(link) => { AppState.comments-total = link; }
+        } }
     }
 }

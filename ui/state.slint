@@ -13,6 +13,8 @@ export struct Breadcrumb { id: string, title: string, position: float, playlist-
 export struct LinkData { title: string, url: string }
 
 export global AppState {
+    pure callback format-comment(string) -> styled-text;
+    callback play-comment-timestamp(string);
     in-out property <bool> bookmarks-enabled: false;
     in-out property <bool> bookmarks-busy: false;
     in-out property <string> bookmarks-error;

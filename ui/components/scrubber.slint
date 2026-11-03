@@ -11,7 +11,15 @@ export component Scrubber inherits Rectangle {
     in property <string> label;
     callback changed(float);
     callback released(float);
+    // Pointer position for a preview shown above the bar, passed as a child.
+    callback hovered(float);
+    callback hover-left();
     private property <bool> active: touch.has-hover || touch.pressed;
+    out property <bool> hovering: root.enabled && root.active;
+    out property <length> hover-x: max(0px, min(root.width, touch.mouse-x));
+    out property <float> hover-value: root.at(touch.mouse-x);
+    changed hovering => { if root.hovering { root.hovered(root.hover-value); } else { root.hover-left(); } }
+    changed hover-value => { if root.hovering { root.hovered(root.hover-value); } }
     private property <length> bar: root.active ? root.thickness + 2px : root.thickness;
     private property <float> shown: touch.pressed ? root.at(touch.mouse-x) : root.value;
     pure function at(x: length) -> float { return max(0, min(1, x / max(1px, root.width))) * root.maximum; }
@@ -40,4 +48,5 @@ export component Scrubber inherits Rectangle {
         }
         moved => { if self.pressed { root.changed(root.at(self.mouse-x)); } }
     }
+    @children
 }

@@ -31,7 +31,8 @@ fn main() {
                     "menu-item",
                     "choice",
                     "back-link",
-                    "scrubber"
+                    "scrubber",
+                    "seek-preview"
                 ]
                 .contains(&name.as_str()),
                 "Unknown SlintYT preview"

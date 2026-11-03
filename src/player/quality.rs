@@ -1,11 +1,13 @@
 //! Account-scoped, bounded, memory-only stream catalogues. Signed URLs never
 //! enter UI models, logs, or the on-disk watch-history cache.
 use super::resolve::Media;
+use super::storyboard::{self, Storyboard};
 use super::subtitles;
 use anyhow::{Result, bail};
 use serde::Deserialize;
 use std::{
     collections::VecDeque,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -22,6 +24,7 @@ pub struct Catalogue {
     pub options: Vec<Quality>,
     pub note: String,
     pub subtitles: Vec<subtitles::Track>,
+    pub storyboards: Vec<Arc<Storyboard>>,
 }
 
 #[derive(Default, Deserialize, Clone)]
@@ -181,6 +184,7 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Catalogue> {
         options,
         note: String::new(),
         subtitles: subtitles::tracks(&info.captions),
+        storyboards: storyboard::parse(bytes).into_iter().map(Arc::new).collect(),
     })
 }
 
@@ -366,6 +370,7 @@ mod tests {
           {"format_id":"drm","vcodec":"avc1","acodec":"aac","height":1080,"protocol":"https","has_drm":true,"url":"https://cdn.example/drm"}
         ]}"#).unwrap();
         assert_eq!(catalogue.options.len(), 3);
+        assert!(catalogue.storyboards.is_empty());
         let video = catalogue
             .options
             .iter()
@@ -379,6 +384,15 @@ mod tests {
                 .iter()
                 .any(|q| q.media.is_none() && q.unavailable.contains("DRM"))
         );
+    }
+    #[test]
+    fn a_malformed_storyboard_keeps_the_quality_list() {
+        let catalogue = parse(br#"{"duration":100,"formats":[
+          {"format_id":"sb0","vcodec":"none","acodec":"none","width":320,"height":180,"fps":1,"columns":"three","rows":3,"fragments":[{"url":"https://i.ytimg.com/a.jpg"}]},
+          {"format_id":"v","vcodec":"vp9","acodec":"opus","protocol":"https","url":"https://cdn.example/video"}
+        ]}"#).unwrap();
+        assert_eq!(catalogue.options.len(), 1);
+        assert!(catalogue.storyboards.is_empty());
     }
     #[test]
     fn cache_is_bounded_expires_and_rejects_old_account_results() {

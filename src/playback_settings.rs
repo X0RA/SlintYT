@@ -25,6 +25,22 @@ pub enum Subtitles {
 }
 pub const SUBTITLES: [Subtitles; 3] = [Subtitles::Off, Subtitles::English, Subtitles::Automatic];
 
+/// Which of YouTube's seek-preview levels to load, sharpest first.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PreviewQuality {
+    #[default]
+    High,
+    Medium,
+    Low,
+    Lowest,
+}
+pub const PREVIEW_QUALITIES: [PreviewQuality; 4] = [
+    PreviewQuality::High,
+    PreviewQuality::Medium,
+    PreviewQuality::Low,
+    PreviewQuality::Lowest,
+];
+
 #[derive(Clone)]
 pub struct StreamSelection {
     pub format: String,
@@ -56,6 +72,8 @@ pub struct Preferences {
     pub resume: bool,
     pub autoplay: bool,
     pub prefetch: bool,
+    pub previews: bool,
+    pub preview_quality: PreviewQuality,
 }
 
 impl Default for Preferences {
@@ -68,6 +86,8 @@ impl Default for Preferences {
             resume: true,
             autoplay: false,
             prefetch: false,
+            previews: true,
+            preview_quality: PreviewQuality::High,
         }
     }
 }
@@ -148,6 +168,16 @@ impl Preferences {
         state.set_playback_resume(self.resume);
         state.set_playback_autoplay(self.autoplay);
         state.set_playback_prefetch(self.prefetch);
+        state.set_playback_previews(self.previews);
+        state.set_playback_preview_quality(self.preview_rank() as i32);
+    }
+
+    /// Position among the storyboard levels, which are also sharpest first.
+    pub fn preview_rank(&self) -> usize {
+        PREVIEW_QUALITIES
+            .iter()
+            .position(|v| v == &self.preview_quality)
+            .unwrap_or(0)
     }
 
     fn change(&mut self, setting: i32, value: i32) -> Option<()> {
@@ -160,6 +190,8 @@ impl Preferences {
             4 if index <= 1 => self.resume = index == 1,
             5 if index <= 1 => self.autoplay = index == 1,
             6 if index <= 1 => self.prefetch = index == 1,
+            7 if index <= 1 => self.previews = index == 1,
+            8 => self.preview_quality = *PREVIEW_QUALITIES.get(index)?,
             _ => return None,
         }
         Some(())
@@ -217,6 +249,9 @@ pub fn wire(app: &AppWindow) -> Arc<RwLock<Preferences>> {
                     if setting == 6 {
                         state.invoke_playback_prefetch_changed();
                     }
+                    if setting == 7 || setting == 8 {
+                        state.invoke_playback_previews_changed();
+                    }
                 }
                 Err(_) => {
                     saved.read().unwrap().publish(&app);
@@ -232,6 +267,24 @@ pub fn wire(app: &AppWindow) -> Arc<RwLock<Preferences>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_settings_change_and_default_on_for_older_saved_settings() {
+        let saved: Preferences = serde_json::from_str(r#"{"autoplay":true}"#).unwrap();
+        assert!(saved.autoplay && saved.previews);
+        assert_eq!(saved.preview_rank(), 0);
+        let mut next = saved;
+        assert!(next.change(7, 0).is_some());
+        assert!(!next.previews);
+        assert!(next.change(7, 2).is_none());
+        assert!(next.change(8, 3).is_some());
+        assert_eq!(next.preview_quality, PreviewQuality::Lowest);
+        assert_eq!(next.preview_rank(), 3);
+        assert!(next.change(8, 4).is_none());
+        let round_trip: Preferences =
+            serde_json::from_str(&serde_json::to_string(&next).unwrap()).unwrap();
+        assert_eq!(round_trip, next);
+    }
 
     #[test]
     fn codec_fallback_names_both_codecs_only_when_they_differ() {

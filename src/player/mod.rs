@@ -9,6 +9,7 @@ mod render;
 mod resolve;
 #[cfg(test)]
 mod smoke;
+mod storyboard;
 mod subtitles;
 
 use crate::{AppState, AppWindow};
@@ -48,6 +49,9 @@ pub struct Playback {
     cache: Arc<Mutex<quality::Cache>>,
     queue: Mutex<queue::Queue>,
     frame_step: Arc<AtomicBool>,
+    preview: Mutex<storyboard::Preview>,
+    preview_levels: Mutex<Vec<Arc<storyboard::Storyboard>>>,
+    preview_http: Option<reqwest::Client>,
 }
 
 #[derive(Default)]
@@ -101,7 +105,9 @@ fn show_subtitles(
     }
 }
 
-fn show_qualities(app: &AppWindow, owner: &Playback, catalogue: quality::Catalogue) {
+fn show_qualities(app: &AppWindow, owner: &Arc<Playback>, catalogue: quality::Catalogue) {
+    *owner.preview_levels.lock().unwrap() = catalogue.storyboards.clone();
+    owner.pick_preview(app);
     let selected = owner.selected.lock().unwrap().clone();
     let index = selected
         .as_ref()
@@ -143,6 +149,7 @@ impl Drop for Playback {
         if let Some(task) = self.subtitle_task.get_mut().unwrap().take() {
             task.abort();
         }
+        self.preview.get_mut().unwrap().clear();
         if let Some(commands) = &self.commands {
             let _ = commands.send(Command::Shutdown(None));
         }
@@ -204,6 +211,7 @@ impl Playback {
     /// Forgets the account entirely, used when its saved profile is removed.
     pub fn clear_session(&self) {
         self.cancel();
+        self.forget_preview();
         self.set_progress_recoverer(None);
         *self.progress.write().unwrap() = None;
         self.cache.lock().unwrap().clear();
@@ -213,6 +221,7 @@ impl Playback {
 
     pub fn set_cookies(&self, cookies: Arc<str>) {
         self.cancel();
+        self.forget_preview();
         self.set_progress_recoverer(None);
         *self.progress.write().unwrap() = None;
         self.cache.lock().unwrap().clear();
@@ -225,12 +234,109 @@ impl Playback {
         if let Some(task) = self.subtitle_task.lock().unwrap().take() {
             task.abort();
         }
+        self.preview.lock().unwrap().pause();
         let epoch = self.epoch.fetch_add(1, Ordering::AcqRel) + 1;
         if let Some(task) = self.task.lock().unwrap().take() {
             task.abort();
         }
         if let Some(commands) = &self.commands {
             let _ = commands.send(Command::Stop(epoch));
+        }
+    }
+
+    fn reset_preview(app: &AppWindow) {
+        let state = app.global::<AppState>();
+        state.set_player_preview_ready(false);
+        state.set_player_preview_image(slint::Image::default());
+    }
+
+    /// Loads the level the settings ask for, or nothing when previews are off.
+    fn pick_preview(self: &Arc<Self>, app: &AppWindow) {
+        let preferences = self.preferences.read().unwrap().clone();
+        let board = if preferences.previews {
+            storyboard::pick(
+                &self.preview_levels.lock().unwrap(),
+                preferences.preview_rank(),
+            )
+        } else {
+            None
+        };
+        let position = app.global::<AppState>().get_player_position();
+        let update = self.preview.lock().unwrap().set_storyboard(board, position);
+        self.apply_preview(app, update);
+    }
+
+    fn forget_preview(&self) {
+        self.preview.lock().unwrap().clear();
+        self.preview_levels.lock().unwrap().clear();
+    }
+
+    /// Never logs download errors, which include the signed URL.
+    fn apply_preview(self: &Arc<Self>, app: &AppWindow, update: storyboard::Update) {
+        let state = app.global::<AppState>();
+        match update.view {
+            storyboard::View::Wait => {}
+            storyboard::View::Hide => state.set_player_preview_ready(false),
+            storyboard::View::Show { frame, sheet } => {
+                if let Some(sheet) = sheet {
+                    state.set_player_preview_image(slint::Image::from_rgba8(sheet));
+                }
+                state.set_player_preview_clip_x(frame.x as i32);
+                state.set_player_preview_clip_y(frame.y as i32);
+                state.set_player_preview_clip_width(frame.width as i32);
+                state.set_player_preview_clip_height(frame.height as i32);
+                state.set_player_preview_ready(true);
+            }
+        }
+        for job in update.jobs {
+            let (owner, weak) = (Arc::downgrade(self), app.as_weak());
+            let (ticket, page, task) = match job {
+                storyboard::Job::Fetch { ticket, page, url } => {
+                    let http = self.preview_http.clone();
+                    let task = self.runtime.spawn(async move {
+                        let bytes = match http {
+                            Some(http) => crate::youtube::download_sheet(&http, &url).await.ok(),
+                            None => None,
+                        };
+                        let _ = weak.upgrade_in_event_loop(move |app| {
+                            if let Some(owner) = owner.upgrade() {
+                                let update =
+                                    owner.preview.lock().unwrap().fetched(ticket, page, bytes);
+                                owner.apply_preview(&app, update);
+                            }
+                        });
+                    });
+                    (ticket, page, task)
+                }
+                storyboard::Job::Decode {
+                    ticket,
+                    page,
+                    bytes,
+                    limit,
+                } => {
+                    let task = self.runtime.spawn_blocking(move || {
+                        let sheet =
+                            crate::youtube::decode_sheet(&bytes, limit)
+                                .ok()
+                                .map(|pixels| {
+                                    slint::SharedPixelBuffer::clone_from_slice(
+                                        &pixels.bytes,
+                                        pixels.width,
+                                        pixels.height,
+                                    )
+                                });
+                        let _ = weak.upgrade_in_event_loop(move |app| {
+                            if let Some(owner) = owner.upgrade() {
+                                let update =
+                                    owner.preview.lock().unwrap().decoded(ticket, page, sheet);
+                                owner.apply_preview(&app, update);
+                            }
+                        });
+                    });
+                    (ticket, page, task)
+                }
+            };
+            self.preview.lock().unwrap().started(ticket, page, task);
         }
     }
 
@@ -479,6 +585,11 @@ impl Playback {
         state.set_player_subtitle_index(0);
         state.set_player_subtitle_note("".into());
         state.set_player_subtitles_loading(true);
+        if start.new_video {
+            self.forget_preview();
+            self.preview.lock().unwrap().leave();
+            Self::reset_preview(app);
+        }
         if start.position == 0. {
             state.set_player_duration(0.);
         }
@@ -880,6 +991,13 @@ pub fn install(app: &AppWindow, runtime: Handle) -> Arc<Playback> {
         )
     });
     let player = Arc::new(Playback {
+        preview: Mutex::default(),
+        preview_levels: Mutex::default(),
+        // Like feed thumbnails, sheets are public images fetched without cookies.
+        preview_http: reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .ok(),
         preferences: crate::playback_settings::wire(app),
         automatic_selection: Mutex::new(
             crate::playback_settings::Preferences::default().selection(),
@@ -926,6 +1044,13 @@ pub fn install(app: &AppWindow, runtime: Handle) -> Arc<Playback> {
         owner.cancel_prefetch();
         if let Some(app) = weak.upgrade() {
             owner.prefetch_next(&app);
+        }
+    });
+    let (weak, owner) = (app.as_weak(), player.clone());
+    state.on_playback_previews_changed(move || {
+        if let Some(app) = weak.upgrade() {
+            Playback::reset_preview(&app);
+            owner.pick_preview(&app);
         }
     });
     let (weak, owner) = (app.as_weak(), player.clone());
@@ -1177,9 +1302,21 @@ pub fn install(app: &AppWindow, runtime: Handle) -> Arc<Playback> {
         owner.load_subtitle(&app, index, owner.epoch.load(Ordering::Acquire));
     });
     let (weak, owner) = (app.as_weak(), player.clone());
+    state.on_player_preview(move |seconds| {
+        if let Some(app) = weak.upgrade() {
+            let update = owner.preview.lock().unwrap().hover(seconds);
+            owner.apply_preview(&app, update);
+        }
+    });
+    let owner = player.clone();
+    state.on_player_preview_end(move || owner.preview.lock().unwrap().leave());
+    let (weak, owner) = (app.as_weak(), player.clone());
     state.on_player_close(move || {
         owner.cancel();
+        owner.forget_preview();
+        owner.preview.lock().unwrap().leave();
         if let Some(app) = weak.upgrade() {
+            Playback::reset_preview(&app);
             let state = app.global::<AppState>();
             if state.get_player_pip() {
                 state.invoke_player_toggle_pip();

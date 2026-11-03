@@ -1,0 +1,39 @@
+import { Scrubber } from "../components/scrubber.slint";
+import { SeekPreview } from "../components/seek-preview.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData } from "../state.slint";
+// Mock sheets with numbered or differently coloured cells, so a wrong clip is obvious.
+export component AppWindow inherits Window {
+    title: "Seek preview";
+    width: 900px; height: 620px; background: #18181b;
+    private property <image> sheet: @image-url("mock-storyboard.png");
+    private property <image> lowest-sheet: @image-url("mock-storyboard-lowest.png");
+    private property <float> hover-at;
+    VerticalLayout { padding: 24px; spacing: 16px; alignment: start;
+        HorizontalLayout { spacing: 16px; alignment: start;
+            first := SeekPreview { source: root.sheet; ready: true; clip-x: 0; clip-y: 0; clip-width: 320; clip-height: 180; time: "0:00"; }
+            last := SeekPreview { source: root.sheet; ready: true; clip-x: 640; clip-y: 360; clip-width: 320; clip-height: 180; time: "1:02:06"; }
+            narrow := SeekPreview { source: root.sheet; ready: true; clip-x: 320; clip-y: 180; clip-width: 320; clip-height: 180; time: "41:30"; frame-height: 90px; }
+        }
+        HorizontalLayout { spacing: 16px; alignment: start;
+            four-three := SeekPreview { source: root.sheet; ready: true; clip-x: 320; clip-y: 0; clip-width: 240; clip-height: 180; time: "4:3 video"; }
+            vertical := SeekPreview { source: root.sheet; ready: true; clip-x: 0; clip-y: 180; clip-width: 101; clip-height: 180; time: "Short"; }
+            no-frame := SeekPreview { ready: false; time: "No frame"; }
+            long-time := SeekPreview { ready: false; time: "10:00:00"; frame-height: 90px; }
+            lowest := SeekPreview { source: root.lowest-sheet; ready: true; clip-x: 192; clip-y: 108; clip-width: 48; clip-height: 27; time: "Lowest quality"; }
+        }
+        Rectangle { height: 160px; }
+        bar := Scrubber {
+            label: "Hover for a preview"; maximum: 1000; value: 250;
+            hovered(v) => { root.hover-at = v; }
+            if bar.hovering : SeekPreview {
+                x: max(0px, min(bar.width - self.width, bar.hover-x - self.width / 2));
+                y: -self.height - 8px;
+                source: root.sheet; ready: true;
+                clip-x: mod(floor(bar.hover-value / 1000 * 9), 3) * 320;
+                clip-y: floor(min(8, floor(bar.hover-value / 1000 * 9)) / 3) * 180;
+                clip-width: 320; clip-height: 180;
+                time: round(root.hover-at) + "s";
+            }
+        }
+    }
+}

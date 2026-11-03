@@ -81,11 +81,11 @@ export component SettingsPage inherits Rectangle {
     private property <int> picked: -1;
     private property <bool> at-end: sections.content-y <= -(sections.content-height - sections.visible-height) + 1px;
     // Updates follows the optional yt-dlp section, and About comes last.
-    private property <int> updates-index: AppState.managed-tools ? 9 : 8;
+    private property <int> updates-index: AppState.managed-tools ? 10 : 9;
     private property <string> version-label: AppState.app-version == "" ? "development build" : AppState.app-version;
-    private property <int> section: root.at-end && root.picked >= 0 ? root.picked : root.scrolled >= about.y ? root.updates-index + 1 : root.scrolled >= updates.y ? root.updates-index : AppState.managed-tools && root.scrolled >= tools.y ? 8 : root.scrolled >= storage.y ? 7 : root.scrolled >= account.y ? 6 : root.scrolled >= bookmarks.y ? 5 : root.scrolled >= feed.y ? 4 : root.scrolled >= watch.y ? 3 : root.scrolled >= interface.y ? 2 : root.scrolled >= engine.y ? 1 : 0;
+    private property <int> section: root.at-end && root.picked >= 0 ? root.picked : root.scrolled >= about.y ? root.updates-index + 1 : root.scrolled >= updates.y ? root.updates-index : AppState.managed-tools && root.scrolled >= tools.y ? 9 : root.scrolled >= storage.y ? 8 : root.scrolled >= account.y ? 7 : root.scrolled >= bookmarks.y ? 6 : root.scrolled >= feed.y ? 5 : root.scrolled >= watch.y ? 4 : root.scrolled >= interface.y ? 3 : root.scrolled >= engine.y ? 2 : root.scrolled >= previews.y ? 1 : 0;
     function jump(index: int) {
-        let target = index == 0 ? playback.y : index == 1 ? engine.y : index == 2 ? interface.y : index == 3 ? watch.y : index == 4 ? feed.y : index == 5 ? bookmarks.y : index == 6 ? account.y : index == 7 ? storage.y : index == 8 && AppState.managed-tools ? tools.y : index == root.updates-index ? updates.y : about.y;
+        let target = index == 0 ? playback.y : index == 1 ? previews.y : index == 2 ? engine.y : index == 3 ? interface.y : index == 4 ? watch.y : index == 5 ? feed.y : index == 6 ? bookmarks.y : index == 7 ? account.y : index == 8 ? storage.y : index == 9 && AppState.managed-tools ? tools.y : index == root.updates-index ? updates.y : about.y;
         root.picked = index;
         sections.content-y = -min(target, max(0px, sections.content-height - sections.visible-height));
     }
@@ -95,7 +95,7 @@ export component SettingsPage inherits Rectangle {
         HorizontalLayout {
         spacing: root.narrow ? 16px : 48px;
         VerticalLayout { width: root.narrow ? 120px : 180px; alignment: start; spacing: 2px;
-            for name[index] in AppState.managed-tools ? ["Playback", "Video engine", "Interface", "Watch status", "Feed", "Bookmarks", "Account", "Storage", "yt-dlp", "Updates", "About"] : ["Playback", "Video engine", "Interface", "Watch status", "Feed", "Bookmarks", "Account", "Storage", "Updates", "About"] : SectionLink {
+            for name[index] in AppState.managed-tools ? ["Playback", "Timeline previews", "Video engine", "Interface", "Watch status", "Feed", "Bookmarks", "Account", "Storage", "yt-dlp", "Updates", "About"] : ["Playback", "Timeline previews", "Video engine", "Interface", "Watch status", "Feed", "Bookmarks", "Account", "Storage", "Updates", "About"] : SectionLink {
                 text: name; active: root.section == index; clicked => { root.jump(index); }
             }
         }
@@ -115,6 +115,10 @@ export component SettingsPage inherits Rectangle {
                     playback-prefetch-row := SettingRow { label: "Prepare next playlist video"; help: "Look up streams ahead of time. No audio or video is downloaded. Skips shuffle."; kind: 1; options: []; action: ""; checked <=> AppState.playback-prefetch; toggled(value) => { AppState.playback-setting-changed(6, value ? 1 : 0); } }
                 }
                 if AppState.playback-settings-error != "" : Text { text: AppState.playback-settings-error; color: Theme.accent; wrap: word-wrap; }
+                previews := SettingSection { title: "Timeline previews"; help: "Frames from YouTube shown when you hover over the seek bar.";
+                    previews-row := SettingRow { first: true; label: "Show previews on hover"; help: "Off also stops downloading them, and only the seek bar remains."; kind: 1; options: []; action: ""; checked <=> AppState.playback-previews; toggled(value) => { AppState.playback-setting-changed(7, value ? 1 : 0); } }
+                    if AppState.playback-previews : preview-quality-row := SettingRow { label: "Preview quality"; help: "Lower quality loads faster and uses less data, about 800 KB down to 20 KB for a 45 minute video. Lowest also shows fewer frames."; kind: 0; options: ["High · 320×180", "Medium · 160×90", "Low · 80×45", "Lowest · 48×27"]; action: ""; checked: false; current-index <=> AppState.playback-preview-quality; selected(index) => { AppState.playback-setting-changed(8, index); } }
+                }
                 engine := SettingSection { title: "Video engine"; help: "libmpv decodes and renders into the app’s OpenGL surface.";
                     SettingRow { first: true; label: "Hardware decoding"; help: "Sets mpv’s hwdec. Auto-safe picks a backend known to work."; kind: 0; options: ["auto-safe", "vaapi", "nvdec", "vulkan", "no"]; action: ""; checked: false; }
                     SettingRow { label: "Stream buffer"; help: "How much video mpv reads ahead. Larger buffers help with bad connections."; kind: 0; options: ["Normal · 150 MB", "Small · 50 MB", "Large · 500 MB"]; action: ""; checked: false; }

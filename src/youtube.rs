@@ -1488,7 +1488,7 @@ pub struct Pixels {
     pub bytes: Vec<u8>,
 }
 
-pub async fn download_thumbnail(http: &reqwest::Client, url: &str) -> Result<Pixels> {
+fn image_url(url: &str) -> Result<reqwest::Url> {
     let url = reqwest::Url::parse(url)?;
     if url.scheme() != "https"
         || !url.host_str().is_some_and(|h| {
@@ -1500,6 +1500,11 @@ pub async fn download_thumbnail(http: &reqwest::Client, url: &str) -> Result<Pix
     {
         bail!("Unsupported thumbnail host");
     }
+    Ok(url)
+}
+
+pub async fn download_thumbnail(http: &reqwest::Client, url: &str) -> Result<Pixels> {
+    let url = image_url(url)?;
     let cache = crate::cache::Cache::new("public-images");
     let cached = if let Some(cache) = &cache {
         cache.bytes("images-v1", url.as_str()).await
@@ -1523,6 +1528,26 @@ fn decode_thumbnail(bytes: &[u8]) -> Result<Pixels> {
     let image = image::load_from_memory(bytes)?
         .thumbnail(640, 360)
         .into_rgba8();
+    Ok(Pixels {
+        width: image.width(),
+        height: image.height(),
+        bytes: image.into_raw(),
+    })
+}
+
+/// Never saved to disk: a signed-in lookup can return sheets of a private video.
+pub async fn download_sheet(http: &reqwest::Client, url: &str) -> Result<Vec<u8>> {
+    thumbnail_bytes(http, &image_url(url)?).await
+}
+
+/// Stays at full size, since a sheet's frames are addressed by pixel.
+pub fn decode_sheet(bytes: &[u8], (width, height): (u32, u32)) -> Result<Pixels> {
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(width);
+    limits.max_image_height = Some(height);
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format()?;
+    reader.limits(limits);
+    let image = reader.decode()?.into_rgba8();
     Ok(Pixels {
         width: image.width(),
         height: image.height(),
@@ -1932,6 +1957,19 @@ mod tests {
             feed.videos.len() > 100 && feed.pages > 1,
             "Test playlist did not extend beyond its first page"
         );
+    }
+
+    #[test]
+    fn sheets_keep_their_size_and_respect_the_limit() {
+        let mut png = Vec::new();
+        image::RgbaImage::new(960, 540)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let pixels = decode_sheet(&png, (960, 540)).unwrap();
+        assert_eq!((pixels.width, pixels.height), (960, 540));
+        assert_eq!(pixels.bytes.len(), 960 * 540 * 4);
+        assert!(decode_sheet(&png, (959, 540)).is_err());
+        assert!(decode_sheet(&png, (960, 539)).is_err());
     }
 
     #[test]

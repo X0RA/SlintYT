@@ -36,6 +36,168 @@ pub(super) fn record_frame(texture: &gl::Texture) {
 }
 
 #[test]
+#[ignore = "requires an OpenGL desktop, libmpv, yt-dlp and network access"]
+fn live_seek_previews_reach_the_ui() {
+    // Uses no cookies, so nothing reaches an account. This video's last sheet
+    // only holds two frames, which is the case most likely to clip wrongly.
+    // Each quality setting is tried in turn, without saving any setting.
+    const VIDEO: &str = "9bZkp7q19f0";
+    const TARGETS: [f32; 3] = [1., 1_000_000., 100.];
+    slint::BackendSelector::new()
+        .backend_name("winit".into())
+        .renderer_name("femtovg".into())
+        .require_opengl()
+        .select()
+        .unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let catalogue = runtime
+        .block_on(resolve::catalogue(VIDEO, "", resolve::Mode::Normal))
+        .expect("Public lookup failed");
+    let levels = catalogue.storyboards.clone();
+    assert_eq!(levels.len(), 4, "Expected all four quality levels");
+    let app = AppWindow::new().unwrap();
+    let player = install(&app, runtime.handle().clone());
+    *player.preferences.write().unwrap() = crate::playback_settings::Preferences::default();
+    show_qualities(&app, &player, catalogue);
+    let stage = Rc::new(Cell::new(0));
+    let started = Instant::now();
+    app.global::<AppState>().invoke_player_preview(TARGETS[0]);
+    let timer = slint::Timer::default();
+    timer.start(slint::TimerMode::Repeated, Duration::from_millis(50), {
+        let (weak, stage, player) = (app.as_weak(), stage.clone(), player.clone());
+        move || {
+            let app = weak.unwrap();
+            let state = app.global::<AppState>();
+            let (rank, target) = (stage.get() / TARGETS.len(), stage.get() % TARGETS.len());
+            let frame = levels[rank].locate(TARGETS[target]).unwrap();
+            let size = state.get_player_preview_image().size();
+            if state.get_player_preview_ready()
+                && state.get_player_preview_clip_x() == frame.x as i32
+                && state.get_player_preview_clip_y() == frame.y as i32
+                && state.get_player_preview_clip_width() == frame.width as i32
+                && state.get_player_preview_clip_height() == frame.height as i32
+                && frame.x + frame.width <= size.width
+                && frame.y + frame.height <= size.height
+            {
+                // Sizes and positions only. Sheet URLs are signed.
+                eprintln!(
+                    "Level {rank}: {}x{} frame at page {} ({}, {}) shown from a {}x{} sheet",
+                    frame.width,
+                    frame.height,
+                    frame.page,
+                    frame.x,
+                    frame.y,
+                    size.width,
+                    size.height
+                );
+                stage.set(stage.get() + 1);
+                let (rank, target) = (stage.get() / TARGETS.len(), stage.get() % TARGETS.len());
+                if rank == levels.len() {
+                    slint::quit_event_loop().unwrap();
+                    return;
+                }
+                if target == 0 {
+                    player.preferences.write().unwrap().preview_quality =
+                        crate::playback_settings::PREVIEW_QUALITIES[rank];
+                    state.invoke_playback_previews_changed();
+                }
+                state.invoke_player_preview(TARGETS[target]);
+            } else if started.elapsed() > Duration::from_secs(60) {
+                slint::quit_event_loop().unwrap();
+            }
+        }
+    });
+    slint::run_event_loop_until_quit().unwrap();
+    assert_eq!(
+        stage.get(),
+        TARGETS.len() * 4,
+        "A preview never reached the UI"
+    );
+    // Turning previews off forgets the sheets and leaves nothing to show.
+    player.preferences.write().unwrap().previews = false;
+    let state = app.global::<AppState>();
+    state.invoke_playback_previews_changed();
+    state.invoke_player_preview(1.);
+    assert!(!state.get_player_preview_ready());
+}
+
+#[test]
+#[ignore = "requires an OpenGL desktop, libmpv, yt-dlp and network access"]
+fn live_seek_previews_keep_up_with_a_pan() {
+    // A 45 minute video with 31 sheets, panned end to end like a mouse would,
+    // with one position per display frame. Uses no cookies. The first sweeps start
+    // as loading does, so only the last, from memory, has to be nearly perfect.
+    const VIDEO: &str = "ZA-tUyM_y7s";
+    const DURATION: f32 = 2738.;
+    const STEP: Duration = Duration::from_millis(16);
+    const PAN: u32 = 125;
+    slint::BackendSelector::new()
+        .backend_name("winit".into())
+        .renderer_name("femtovg".into())
+        .require_opengl()
+        .select()
+        .unwrap();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let catalogue = runtime
+        .block_on(resolve::catalogue(VIDEO, "", resolve::Mode::Normal))
+        .expect("Public lookup failed");
+    let board = catalogue.storyboards[0].clone();
+    let app = AppWindow::new().unwrap();
+    let player = install(&app, runtime.handle().clone());
+    *player.preferences.write().unwrap() = crate::playback_settings::Preferences::default();
+    show_qualities(&app, &player, catalogue);
+    // Three sweeps: there and back while sheets load, then again from memory.
+    let (tick, first, matched) = (
+        Rc::new(Cell::new(0_u32)),
+        Rc::new(Cell::new(None)),
+        Rc::new(Cell::new([0_u32; 3])),
+    );
+    let started = Instant::now();
+    let timer = slint::Timer::default();
+    timer.start(slint::TimerMode::Repeated, STEP, {
+        let (weak, tick, first, matched) =
+            (app.as_weak(), tick.clone(), first.clone(), matched.clone());
+        move || {
+            let app = weak.unwrap();
+            let state = app.global::<AppState>();
+            let now = tick.get();
+            let sweep = (now / PAN) as usize;
+            if sweep == 3 {
+                slint::quit_event_loop().unwrap();
+                return;
+            }
+            let progress = (now % PAN) as f32 / PAN as f32;
+            let progress = if sweep == 1 { 1. - progress } else { progress };
+            let frame = board.locate(progress * DURATION).unwrap();
+            state.invoke_player_preview(progress * DURATION);
+            let showing = state.get_player_preview_ready()
+                && state.get_player_preview_clip_x() == frame.x as i32
+                && state.get_player_preview_clip_y() == frame.y as i32;
+            if showing {
+                let mut counts = matched.get();
+                counts[sweep] += 1;
+                matched.set(counts);
+                if first.get().is_none() {
+                    first.set(Some(started.elapsed()));
+                }
+            }
+            tick.set(now + 1);
+        }
+    });
+    slint::run_event_loop_until_quit().unwrap();
+    eprintln!(
+        "First frame after {:?}. Positions showing their own frame, of {PAN} per sweep: {:?}",
+        first.get(),
+        matched.get()
+    );
+    assert!(first.get().is_some(), "No frame appeared during the pan");
+    assert!(
+        matched.get()[2] >= PAN * 95 / 100,
+        "A loaded video should keep up with the pointer"
+    );
+}
+
+#[test]
 #[ignore = "requires an OpenGL desktop, libmpv and ffmpeg"]
 fn native_video_playback_controls_resize_and_close() {
     // Optional end-to-end pass uses YouTube, with no browser access unless an

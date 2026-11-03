@@ -120,6 +120,9 @@ export global AppState {
     in-out property <bool> playback-autoplay: false;
     in-out property <bool> playback-prefetch: false;
     callback playback-prefetch-changed();
+    in-out property <bool> playback-previews: true;
+    in-out property <int> playback-preview-quality: 0;
+    callback playback-previews-changed();
     in-out property <string> playback-settings-error;
     // Fields 0–6 follow the rows in Settings → Playback.
     callback playback-setting-changed(int, int);
@@ -224,6 +227,15 @@ export global AppState {
     in-out property <int> player-subtitle-index: 0;
     in-out property <bool> player-subtitles-loading: false;
     in-out property <string> player-subtitle-note;
+    // Current seek preview: one cell, in source pixels, of a storyboard sheet.
+    in-out property <bool> player-preview-ready: false;
+    in-out property <image> player-preview-image;
+    in-out property <int> player-preview-clip-x;
+    in-out property <int> player-preview-clip-y;
+    in-out property <int> player-preview-clip-width;
+    in-out property <int> player-preview-clip-height;
+    callback player-preview(float);
+    callback player-preview-end();
     callback play-video(string, string);
     callback player-close();
     callback player-toggle();

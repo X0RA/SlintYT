@@ -1,0 +1,33 @@
+// Frame and time shown above the seek bar. The frame is one cell of a storyboard
+// sheet, with no TouchArea so it cannot take the pointer away from the bar.
+export component SeekPreview {
+    in property <image> source;
+    in property <int> clip-x;
+    in property <int> clip-y;
+    in property <int> clip-width;
+    in property <int> clip-height;
+    in property <bool> ready: false;
+    in property <string> time;
+    in property <length> frame-height: 144px;
+    private property <bool> framed: root.ready && root.clip-height > 0;
+    private property <length> frame-width: root.framed ? root.frame-height * root.clip-width / root.clip-height : 0px;
+    private property <length> pill-width: label.preferred-width + 16px;
+    private property <length> pill-height: 24px;
+    width: max(root.frame-width, root.pill-width);
+    height: root.framed ? root.frame-height + 4px + root.pill-height : root.pill-height;
+    if root.framed : Rectangle {
+        x: (parent.width - self.width) / 2; y: 0px; width: root.frame-width; height: root.frame-height;
+        background: black; border-radius: 6px; clip: true;
+        Image {
+            width: 100%; height: 100%; image-fit: fill;
+            source: root.source;
+            source-clip-x: root.clip-x; source-clip-y: root.clip-y;
+            source-clip-width: root.clip-width; source-clip-height: root.clip-height;
+        }
+    }
+    Rectangle {
+        x: (parent.width - self.width) / 2; y: parent.height - self.height; width: root.pill-width; height: root.pill-height;
+        background: #000000cc; border-radius: 6px;
+        label := Text { text: root.time; color: white; font-size: 12px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+    }
+}

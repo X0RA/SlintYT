@@ -5,6 +5,7 @@ import { ActionButton } from "../components/action-button.slint";
 import { Icon } from "../components/icon.slint";
 import { MenuItem, MenuSurface } from "../components/menu-item.slint";
 import { Scrubber } from "../components/scrubber.slint";
+import { SeekPreview } from "../components/seek-preview.slint";
 import { VideoDetails } from "video-details.slint";
 
 // Round translucent button floating over the video.
@@ -198,13 +199,27 @@ export component VideoPlayer inherits Rectangle {
                                     channel-touch := TouchArea { enabled: AppState.player-channel-id != ""; mouse-cursor: pointer; clicked => { AppState.open-channel(AppState.player-channel-id,0,0,""); } }
                                 }
                             }
-                            Scrubber {
+                            seek-bar := Scrubber {
                                 label: "Playback position"; maximum: max(1, AppState.player-duration);
                                 value: root.seeking ? root.seek-position : AppState.player-position;
                                 buffered: AppState.player-buffered;
                                 enabled: root.playable && AppState.player-duration > 0;
                                 changed(value) => { root.seek-position = value; root.seeking = true; root.show-controls(); }
                                 released(value) => { root.seek(value); AppState.player-position = value; root.seeking = false; }
+                                hovered(value) => { AppState.player-preview(value); }
+                                hover-left => { AppState.player-preview-end(); }
+                                if seek-bar.hovering && AppState.playback-previews : SeekPreview {
+                                    x: max(0px, min(seek-bar.width - self.width, seek-bar.hover-x - self.width / 2));
+                                    y: -self.height - 8px;
+                                    frame-height: root.narrow ? 90px : 144px;
+                                    ready: AppState.player-preview-ready;
+                                    source: AppState.player-preview-image;
+                                    clip-x: AppState.player-preview-clip-x;
+                                    clip-y: AppState.player-preview-clip-y;
+                                    clip-width: AppState.player-preview-clip-width;
+                                    clip-height: AppState.player-preview-clip-height;
+                                    time: root.clock(seek-bar.hover-value);
+                                }
                             }
                             HorizontalLayout { padding-top: 6px; spacing: 2px; cross-axis-alignment: center;
                                 toggle := ControlButton { icon: AppState.player-paused || AppState.player-ended ? "play" : "pause"; tip: AppState.player-paused ? "Play" : "Pause"; enabled: root.playable; clicked => { root.toggle(); } }

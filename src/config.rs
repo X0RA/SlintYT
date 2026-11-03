@@ -216,7 +216,7 @@ mod tests {
 
     #[test]
     fn playback_defaults_migrate_and_preferences_survive_other_settings_writes() {
-        use crate::playback_settings::{Codec, Preferences, Subtitles};
+        use crate::playback_settings::{Codec, Preferences, PreviewQuality, Subtitles};
         let root = tempfile::tempdir().unwrap();
         let store = Store {
             root: root.path().into(),
@@ -238,6 +238,8 @@ mod tests {
             resume: false,
             autoplay: true,
             prefetch: true,
+            previews: false,
+            preview_quality: PreviewQuality::Low,
         };
         store.save_playback(&preferences).unwrap();
         assert!(store.load_settings().unwrap().bookmarks_enabled);

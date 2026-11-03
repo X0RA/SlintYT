@@ -5,12 +5,13 @@ export component AppWindow inherits Window {
     width: 560px; height: 220px; background: #000000;
     private property <float> position: 250;
     private property <float> volume: 70;
+    private property <float> hover: -1;
     VerticalLayout { padding: 24px; spacing: 18px;
-        Scrubber { label: "Position"; maximum: 698; value: root.position; buffered: 400; changed(v) => { root.position = v; } released(v) => { root.position = v; } }
+        bar := Scrubber { label: "Position"; maximum: 698; value: root.position; buffered: 400; changed(v) => { root.position = v; } released(v) => { root.position = v; } hovered(v) => { root.hover = v; } hover-left => { root.hover = -1; } }
         Scrubber { label: "Empty"; maximum: 0; value: 0; }
         HorizontalLayout { alignment: start;
             Scrubber { width: 72px; label: "Volume"; maximum: 100; thickness: 3px; fill: white; knob-always: false; value: root.volume; changed(v) => { root.volume = v; } }
         }
-        Text { text: "Position " + round(root.position) + "s · volume " + round(root.volume); color: white; }
+        Text { text: "Position " + round(root.position) + "s · volume " + round(root.volume) + (root.hover < 0 ? " · not hovering" : " · hovering " + round(root.hover) + "s"); color: white; }
     }
 }

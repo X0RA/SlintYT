@@ -53,3 +53,10 @@ slint-build = "1.18.1"
 [profile.dev-fast]
 inherits = "dev"
 debug = 0
+
+# Unoptimized, decoding one seek-preview sheet takes about 400 ms.
+[profile.dev.package.image]
+opt-level = 3
+
+[profile.dev.package.image-webp]
+opt-level = 3

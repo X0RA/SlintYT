@@ -142,8 +142,8 @@ export component VideoFeed inherits Rectangle {
                 private property <length> lead: section-index == 0 && root.list-first ? root.top-inset : 0px;
                 private property <length> top: self.lead + (self.divided ? 22px : 0px) + (self.label-above ? 30px : 0px);
                 private property <length> date-width: self.wide-history ? 172px : 0px;
-                private property <length> card-width: (feed-list.width - self.date-width - 20px * (root.columns - 1)) / root.columns;
-                height: self.top + self.card-width * 9 / 16 + 39px + 24px;
+                private property <length> card-width: floor((feed-list.width - self.date-width - 20px * (root.columns - 1)) / root.columns / 1px) * 1px;
+                height: self.top + round(self.card-width * 9 / 16 / 1px) * 1px + 39px + 24px;
                 if section-row.divided : Rectangle { x: 0px; y: 0px; width: parent.width; height: 1px; background: Theme.line; }
                 if section-row.wide-history && section.label != "" : VerticalLayout {
                     x: 0px; y: parent.top; width: parent.date-width - 24px; alignment: start; spacing: 4px;
@@ -155,9 +155,10 @@ export component VideoFeed inherits Rectangle {
                     Text { text: section.label; color: root.history ? Theme.text : Theme.muted; font-size: 13px; font-weight: 600; vertical-alignment: center; }
                     if root.history : Text { text: section.detail; color: Theme.subtle; font-size: 13px; vertical-alignment: center; }
                 }
-                HorizontalLayout { x: parent.date-width; y: parent.top; width: parent.width - parent.date-width; height: parent.card-width * 9 / 16 + 39px; spacing: 20px;
+                Rectangle { x: parent.date-width; y: parent.top; width: parent.width - parent.date-width; height: round(parent.card-width * 9 / 16 / 1px) * 1px + 39px;
                     for col in root.columns : VideoCard {
-                        width: parent.width / root.columns - 20px * (root.columns - 1) / root.columns;
+                        x: col * (section-row.card-width + 20px); y: 0px;
+                        width: section-row.card-width; height: parent.height;
                         visible: col < section.count;
                         video: AppState.videos[section.start + col];
                         show-watched: !root.history; compact: root.history;

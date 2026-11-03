@@ -965,12 +965,7 @@ pub(super) fn wire(
             toast(
                 &weak,
                 result,
-                if liked {
-                    "Added to liked videos"
-                } else {
-                    "Like removed"
-                }
-                .into(),
+                if liked { "Liked" } else { "Unliked" }.into(),
             );
         });
     });

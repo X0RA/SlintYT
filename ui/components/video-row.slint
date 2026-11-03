@@ -38,8 +38,10 @@ export component VideoRow inherits Rectangle {
             horizontal-stretch: 1; padding-left: 8px; padding-right: 8px; spacing: root.narrow ? 12px : 20px; cross-axis-alignment: center;
             Text { text: root.position; color: #71717a; font-size: 14px; width: 22px; horizontal-alignment: right; vertical-alignment: center; }
             Rectangle {
-                width: root.thumb-width; height: self.width * 9 / 16; border-radius: 12px; clip: true; background: Theme.raised;
-                Image { source: root.video.thumbnail; width: parent.width; height: parent.height; image-fit: cover; }
+                width: root.thumb-width; height: self.width * 9 / 16; border-radius: 12px; background: Theme.raised;
+                Rectangle { width: parent.width; height: parent.height; border-radius: 12px; clip: true;
+            Image { source: root.video.thumbnail; width: parent.width; height: parent.height; image-fit: cover; }
+            }
                 if AppState.bookmarks-enabled : BookmarkButton { x: 8px; y: 8px; video-id: root.video.id; reveal: touch.has-hover; }
                 if root.video.duration != "" : Rectangle {
                     x: parent.width - self.width - 8px; y: parent.height - self.height - 9px;

@@ -14,9 +14,11 @@ export component ChannelHeader inherits Rectangle {
     FocusScope {
     VerticalLayout { spacing: 20px;
         Rectangle {
-            height: root.expanded ? 350px : 240px; border-radius: 28px; clip: true; background: #1e2633;
+            height: root.expanded ? 350px : 240px; border-radius: 28px; background: #1e2633;
+            Rectangle { width: parent.width; height: parent.height; border-radius: 28px; clip: true;
             Image { source: AppState.channel-banner; width: parent.width; height: parent.height; image-fit: cover; }
             Rectangle { width: parent.width; height: parent.height; background: @linear-gradient(180deg, #0a0a0b00, #0a0a0bef); }
+            }
             VerticalLayout { padding: 26px; alignment: end; spacing: 12px;
                 HorizontalLayout { spacing: 20px; cross-axis-alignment: center;
                     Avatar { width: root.width < 700px ? 64px : 80px; initials: AppState.channel-initials; tone: AppState.channel-tone; url: AppState.channel-avatar; }

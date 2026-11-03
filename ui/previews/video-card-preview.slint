@@ -1,3 +1,4 @@
+// Regression preview: rounded text layers, pixel geometry and active icons.
 import { AppState } from "../state.slint";
 import { VideoCard } from "../components/video-card.slint";
 export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData } from "../state.slint";
@@ -8,7 +9,7 @@ export component AppWindow inherits Window {
     title: "Video card preview";
     width: 900px; height: 1190px; background: #0f0f0f;
     private property <string> last-opened;
-    private property <length> card-width: (root.width - 66px) / 2;
+    private property <length> card-width: floor((root.width - 66px) / 2 / 1px) * 1px;
     VerticalLayout {
         padding: 24px; spacing: 18px;
         HorizontalLayout {

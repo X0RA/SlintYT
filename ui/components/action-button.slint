@@ -31,7 +31,7 @@ export component ActionButton inherits Rectangle {
         padding-left:  root.text == "" ? 0px : 16px;
         padding-right: root.text == "" ? 0px : 16px;
         spacing: root.text == "" || root.icon == "" ? 0px : 8px; alignment: center; cross-axis-alignment: center;
-        if root.icon != "" : Icon { name: root.icon; tint: root.primary ? Theme.background : root.active ? Theme.strong : Theme.text; width: root.icon-size; height: root.icon-size; }
+        if root.icon != "" : Icon { name: root.icon == "like" && root.active ? "like-filled" : root.icon; tint: root.primary ? Theme.background : root.active ? Theme.strong : Theme.text; width: root.icon-size; height: root.icon-size; }
         label := Text { text: root.text; visible: root.text != ""; color: root.primary ? Theme.background : root.active ? Theme.strong : Theme.text; font-size: 13px; font-weight: root.active || root.primary ? 600 : 500; vertical-alignment: center; overflow: elide; }
     }
     touch := TouchArea { enabled: root.enabled; mouse-cursor: pointer; clicked => { focus.focus(); root.clicked(); } }

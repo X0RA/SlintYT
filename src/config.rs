@@ -45,6 +45,8 @@ pub struct Settings {
     pub playback: crate::playback_settings::Preferences,
     #[serde(default)]
     pub bookmarks_enabled: bool,
+    #[serde(default)]
+    pub twitch_enabled: bool,
     /// `browser` was the sole field before saved profiles were introduced.
     #[serde(default, alias = "browser")]
     pub current_profile: Option<Selection>,
@@ -178,6 +180,13 @@ impl Store {
         let _guard = SETTINGS_WRITE.lock().unwrap();
         let mut settings = self.load_settings()?;
         settings.bookmarks_enabled = enabled;
+        self.write(&settings)
+    }
+
+    pub fn save_twitch_enabled(&self, enabled: bool) -> Result<()> {
+        let _guard = SETTINGS_WRITE.lock().unwrap();
+        let mut settings = self.load_settings()?;
+        settings.twitch_enabled = enabled;
         self.write(&settings)
     }
 

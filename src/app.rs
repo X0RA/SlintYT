@@ -20,6 +20,7 @@ mod avatars;
 mod bookmarks;
 mod folders;
 mod shorts;
+mod twitch;
 
 enum Command {
     SessionRecovered {
@@ -91,6 +92,7 @@ pub fn wire(app: &AppWindow) -> (tokio::runtime::Runtime, Arc<crate::player::Pla
         sender.clone(),
         generation.clone(),
     );
+    twitch::wire(app, runtime.handle().clone());
     let ui = app.global::<AppState>();
     let (send, weak) = (sender.clone(), app.as_weak());
     ui.on_switch_profile(move |index| {
@@ -202,6 +204,7 @@ pub fn wire(app: &AppWindow) -> (tokio::runtime::Runtime, Arc<crate::player::Pla
             state.set_account_menu_open(false);
             state.set_sync_menu_open(false);
             state.set_settings_open(false);
+            state.set_twitch_open(false);
             state.set_setup_open(true);
             state.set_busy(true);
             state.set_error("".into());
@@ -346,6 +349,7 @@ fn prepare(app: &AppWindow, view: &View) {
         state.invoke_player_close();
     }
     state.set_settings_open(false);
+    state.set_twitch_open(false);
     state.set_scroll_reset(state.get_scroll_reset() + 1);
     state.set_sections(ModelRc::default());
     state.set_channel_filter("".into());
@@ -888,6 +892,7 @@ async fn worker(
                     state.set_startup_failed(false);
                     state.set_error("".into());
                     state.set_settings_open(false);
+                    state.set_twitch_open(false);
                     state.set_setup_open(true);
                     state.set_busy(true);
                     state.set_status("Looking for browser profiles…".into());
@@ -1044,6 +1049,7 @@ async fn worker(
                     state.set_initializing(false);
                     state.set_startup_failed(false);
                     state.set_settings_open(false);
+                    state.set_twitch_open(false);
                     state.set_setup_open(true);
                     state.set_busy(true);
                     state.set_error("".into());

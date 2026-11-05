@@ -414,7 +414,7 @@ impl Playback {
         };
         let state = app.global::<AppState>();
         let (id, title) = self.current.lock().unwrap().clone();
-        if !resolve::valid_id(&id) || !state.get_player_open() {
+        if !resolve::playable_id(&id) || !state.get_player_open() {
             return false;
         }
         let quality = self.selected.lock().unwrap().clone();
@@ -506,6 +506,10 @@ impl Playback {
             state.get_breadcrumbs().iter().collect::<Vec<_>>()
         } else {
             state.set_player_origin(match state.get_view_kind() {
+                _ if state.get_twitch_open() && state.get_twitch_user_open() => {
+                    state.get_twitch_user_name()
+                }
+                _ if state.get_twitch_open() => "Twitch".into(),
                 9 => "Bookmarks".into(),
                 1 => "History".into(),
                 4 => state.get_page_title(),
@@ -547,7 +551,10 @@ impl Playback {
         *self.requested_subtitle.lock().unwrap() = start.subtitle.clone();
         let state = app.global::<AppState>();
         let preferences = self.preferences.read().unwrap().clone();
-        let restore = start.restore && preferences.resume;
+        // Twitch has no account session here, so no resume, history or YouTube metadata.
+        let twitch = resolve::twitch_id(&id).is_some();
+        let restore = start.restore && preferences.resume && !twitch;
+        state.set_player_twitch(twitch);
         let speed = if start.new_video {
             preferences.speed
         } else {
@@ -617,11 +624,16 @@ impl Playback {
             fail(app, "The embedded mpv player could not be initialized.");
             return;
         };
-        let Some(cookies) = self.cookies.read().unwrap().clone() else {
-            fail(app, "Connect your browser profile before playing a video.");
-            return;
+        let cookies = if twitch {
+            Arc::from("")
+        } else {
+            let Some(cookies) = self.cookies.read().unwrap().clone() else {
+                fail(app, "Connect your browser profile before playing a video.");
+                return;
+            };
+            cookies
         };
-        if !resolve::valid_id(&id) {
+        if !resolve::playable_id(&id) {
             fail(app, "This video has an invalid YouTube ID.");
             return;
         }
@@ -632,7 +644,11 @@ impl Playback {
         let cache = self.cache.clone();
         let generation = cache.lock().unwrap().generation;
         let selection_key = selection.cache_key();
-        let progress_client = self.progress.read().unwrap().clone();
+        let progress_client = if twitch {
+            None
+        } else {
+            self.progress.read().unwrap().clone()
+        };
         let current_epoch = self.epoch.clone();
         let mut progress_changes = self.progress_changed.subscribe();
         let lookup_revision = AtomicU64::new(*progress_changes.borrow());
@@ -705,7 +721,7 @@ impl Playback {
             let tracking = None;
             // Only automatic picks for a new video report a codec fallback.
             let codec_notice = match &result {
-                Ok(media) if start.new_video && start.quality.is_none() => {
+                Ok(media) if start.new_video && start.quality.is_none() && !twitch => {
                     preferences.codec_fallback(&media.vcodec)
                 }
                 _ => None,
@@ -819,7 +835,7 @@ impl Playback {
                 });
             };
             let tracking = async {
-                if !playable {
+                if !playable || twitch {
                     return;
                 }
                 let mut outcome = if pending_metadata {
@@ -1107,6 +1123,9 @@ pub fn install(app: &AppWindow, runtime: Handle) -> Arc<Playback> {
         use slint::Model;
         if let Some(app) = weak.upgrade() {
             let ui = app.global::<AppState>();
+            if ui.get_player_twitch() {
+                return;
+            }
             if ui.get_player_playlist_index() >= 0 {
                 let next = {
                     let queue = owner.queue.lock().unwrap();

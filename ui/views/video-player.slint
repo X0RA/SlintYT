@@ -223,7 +223,7 @@ export component VideoPlayer inherits Rectangle {
                             }
                             HorizontalLayout { padding-top: 6px; spacing: 2px; cross-axis-alignment: center;
                                 toggle := ControlButton { icon: AppState.player-paused || AppState.player-ended ? "play" : "pause"; tip: AppState.player-paused ? "Play" : "Pause"; enabled: root.playable; clicked => { root.toggle(); } }
-                                ControlButton { icon: "next"; tip: "Next video"; clicked => { AppState.player-next(); } }
+                                if !AppState.player-twitch : ControlButton { icon: "next"; tip: "Next video"; clicked => { AppState.player-next(); } }
                                 ControlButton { icon: AppState.player-muted ? "mute" : "volume"; tip: AppState.player-muted ? "Unmute" : "Mute"; clicked => { AppState.player-toggle-mute(); } }
                                 if !root.narrow : Rectangle { width: 82px; height: 44px;
                                     Scrubber { x: 0px; width: 72px; label: "Volume"; maximum: 100; thickness: 3px; fill: white; knob-always: false;
@@ -238,7 +238,7 @@ export component VideoPlayer inherits Rectangle {
                                 Rectangle { horizontal-stretch: 1; }
                                 ControlButton { text: AppState.player-speed + "×"; tip: "Playback speed"; active: root.menu == 1; clicked => { root.menu = root.menu == 1 ? 0 : 1; } }
                                 quality-control := ControlButton { text: AppState.player-current-quality != "" ? AppState.player-current-quality : AppState.player-loading ? "Loading…" : "Quality"; tip: AppState.player-current-quality != "" ? "Video quality · " + AppState.player-current-quality : "Video quality"; active: root.menu == 2; clicked => { root.menu = root.menu == 2 ? 0 : 2; } }
-                                subtitles := ControlButton { icon: "subtitles"; tip: AppState.player-subtitle-index > 0 ? "Turn subtitles off (right-click for languages)" : "Choose subtitles"; pressed-state: AppState.player-subtitle-index > 0; active: root.menu == 3;
+                                if !AppState.player-twitch : subtitles := ControlButton { icon: "subtitles"; tip: AppState.player-subtitle-index > 0 ? "Turn subtitles off (right-click for languages)" : "Choose subtitles"; pressed-state: AppState.player-subtitle-index > 0; active: root.menu == 3;
                                     clicked => { root.subtitles(); }
                                     right-clicked => { root.menu = root.menu == 3 ? 0 : 3; }
                                 }
@@ -246,7 +246,7 @@ export component VideoPlayer inherits Rectangle {
                             }
                         }
                         // Sits centred in the control row rather than taking a row of its own.
-                        if root.chrome && !root.narrow : Rectangle {
+                        if root.chrome && !root.narrow && !AppState.player-twitch : Rectangle {
                             x: (parent.width - self.width) / 2; y: parent.height - 12px - 44px + (44px - self.height) / 2;
                             width: hint.preferred-width + 24px; height: 32px;
                             accessible-role: button; accessible-label: "More below"; accessible-action-default => { page.content-y = -root.height; }
@@ -294,7 +294,7 @@ export component VideoPlayer inherits Rectangle {
                         }
                     }
                 }
-                if !AppState.player-fullscreen && !AppState.player-pip : VideoDetails {}
+                if !AppState.player-fullscreen && !AppState.player-pip && !AppState.player-twitch : VideoDetails {}
             }
         }
         key-pressed(event) => {
@@ -323,7 +323,7 @@ export component VideoPlayer inherits Rectangle {
         KeyBinding { keys: @keys(K); enabled: root.playable; activated => { root.toggle(); root.show-controls(); } }
         KeyBinding { keys: @keys(F); activated => { root.toggle-fullscreen(); } }
         KeyBinding { keys: @keys(M); activated => { AppState.player-toggle-mute(); } }
-        KeyBinding { keys: @keys(C); activated => { root.subtitles(); } }
+        KeyBinding { keys: @keys(C); enabled: !AppState.player-twitch; activated => { root.subtitles(); } }
         KeyBinding { keys: @keys(LeftArrow); activated => { root.seek(max(0,AppState.player-position - 5)); root.show-controls(); } }
         KeyBinding { keys: @keys(RightArrow); activated => { root.seek(AppState.player-position + 5); root.show-controls(); } }
         KeyBinding { keys: @keys(J); activated => { root.seek(max(0,AppState.player-position - 10)); } }

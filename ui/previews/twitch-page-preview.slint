@@ -1,0 +1,27 @@
+import { TwitchPage } from "../views/twitch-page.slint";
+import { AppState } from "../state.slint";
+import { Button } from "std-widgets.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData, TwitchResult } from "../state.slint";
+export component AppWindow inherits Window {
+    title: "Twitch page preview";
+    preferred-width: 900px; height: 600px; min-width: 400px; background: #0e0e10;
+    function clear() { AppState.twitch-busy = false; AppState.twitch-error = ""; AppState.twitch-results = []; AppState.twitch-cursor = ""; AppState.twitch-results-query = "speedrun"; }
+    init => { AppState.twitch-search-text = "speedrun"; }
+    VerticalLayout {
+        TwitchPage { vertical-stretch: 1; }
+        HorizontalLayout { height: 44px; spacing: 8px; padding: 4px;
+            Button { text: "Idle"; clicked => { root.clear(); AppState.twitch-results-query = ""; } }
+            Button { text: "Loading"; clicked => { root.clear(); AppState.twitch-busy = true; } }
+            Button { text: "No results"; clicked => { root.clear(); } }
+            Button { text: "Error"; clicked => { root.clear(); AppState.twitch-error = "Twitch search is unavailable right now. Its API changed and no updated query list is published yet."; } }
+            Button { text: "Videos"; clicked => { root.clear(); AppState.twitch-results-mode = 0; AppState.twitch-search-mode = 0; AppState.twitch-results = [
+                { title: "Any% world record attempts", subtitle: "GamesDoneQuick", metadata: "Celeste · 12.5K views · 2026-11-04", duration: "1:50:31" },
+                { title: "A very long video title that should elide because it does not fit inside the available width of this row at all", subtitle: "Runner", metadata: "1 view · 2026-01-02", duration: "12:04" },
+            ]; } }
+            Button { text: "Users"; clicked => { root.clear(); AppState.twitch-results-mode = 1; AppState.twitch-search-mode = 1; AppState.twitch-results = [
+                { title: "GamesDoneQuick", subtitle: "@gamesdonequick · 2.1M followers", metadata: "Replay of the marathon", initials: "GD", tone: #3b4a63 },
+                { title: "quietstreamer", subtitle: "@quietstreamer · 1 follower", initials: "QS", tone: #4a3a3a },
+            ]; } }
+        }
+    }
+}

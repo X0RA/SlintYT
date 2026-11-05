@@ -11,6 +11,7 @@ export struct FeedSection { label: string, detail: string, start: int, count: in
 export struct CommentData { id: string, author: string, author-id: string, initials: string, avatar: string, text: string, metadata: string, likes: string, replies: int, token: string, indent: int, expanded: bool, liked: bool, can-like: bool }
 export struct Breadcrumb { id: string, title: string, position: float, playlist-index: int }
 export struct LinkData { title: string, url: string }
+export struct TwitchResult { id: string, title: string, subtitle: string, metadata: string, duration: string, picture: string, initials: string, tone: color }
 
 export global AppState {
     pure callback format-comment(string) -> styled-text;
@@ -112,6 +113,46 @@ export global AppState {
     pure callback channel-count([VideoData], string, bool) -> int;
     in-out property <int> scroll-reset: 0;
     in-out property <bool> settings-open: false;
+    in-out property <bool> twitch-enabled: false;
+    in-out property <bool> twitch-open: false;
+    callback set-twitch-enabled(bool);
+    in-out property <string> twitch-search-text;
+    // 0 searches videos, 1 searches users.
+    in-out property <int> twitch-search-mode: 0;
+    in-out property <[TwitchResult]> twitch-results;
+    // What's on screen, which stays put while the search text and radio change.
+    in-out property <string> twitch-results-query;
+    in-out property <int> twitch-results-mode: 0;
+    in-out property <string> twitch-cursor;
+    in-out property <bool> twitch-busy: false;
+    in-out property <string> twitch-error;
+    in-out property <int> twitch-sort: 0;
+    callback twitch-search(string);
+    callback twitch-load-more();
+    callback twitch-sort-changed();
+    callback twitch-play(string, string, string);
+    in-out property <bool> player-twitch: false;
+    // The user page. Its tab follows Past broadcasts, Highlights, Uploads.
+    in-out property <bool> twitch-user-open: false;
+    in-out property <string> twitch-user-login;
+    in-out property <string> twitch-user-name;
+    in-out property <string> twitch-user-meta;
+    in-out property <string> twitch-user-description;
+    in-out property <string> twitch-user-avatar;
+    in-out property <string> twitch-user-initials: "?";
+    in-out property <color> twitch-user-tone: #3b4a63;
+    in-out property <int> twitch-user-tab: 0;
+    in-out property <int> twitch-user-sort: 0;
+    in-out property <string> twitch-user-filter;
+    in-out property <[TwitchResult]> twitch-user-videos;
+    in-out property <bool> twitch-user-more: false;
+    in-out property <bool> twitch-user-busy: false;
+    in-out property <string> twitch-user-error;
+    in-out property <string> twitch-user-note;
+    callback twitch-open-user(TwitchResult);
+    callback twitch-user-reload();
+    callback twitch-user-load-more();
+    callback twitch-user-filter-changed();
     in-out property <int> playback-quality: 0;
     in-out property <int> playback-codec: 0;
     in-out property <int> playback-speed: 0;

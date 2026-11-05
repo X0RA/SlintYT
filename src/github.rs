@@ -10,12 +10,17 @@ pub fn user_agent() -> String {
 /// Reads at most `limit` bytes. Small metadata requests get a short timeout.
 pub async fn fetch(client: &reqwest::Client, url: &str, limit: usize) -> Result<Vec<u8>> {
     let timeout = if limit <= 2 * 1024 * 1024 { 20 } else { 180 };
-    let mut response = client
+    let response = client
         .get(url)
         .timeout(Duration::from_secs(timeout))
         .send()
         .await?
         .error_for_status()?;
+    read_limited(response, limit).await
+}
+
+/// Reads a response body, giving up once it passes `limit` bytes.
+pub async fn read_limited(mut response: reqwest::Response, limit: usize) -> Result<Vec<u8>> {
     if response.content_length().is_some_and(|n| n > limit as u64) {
         bail!("The download is larger than expected.");
     }

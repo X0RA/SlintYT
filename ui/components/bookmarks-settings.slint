@@ -3,6 +3,7 @@ import { Theme } from "../theme.slint";
 import { AppState, LinkData } from "../state.slint";
 import { ActionButton } from "action-button.slint";
 import { MenuItem, MenuSurface } from "menu-item.slint";
+import { RadioButton } from "radio-button.slint";
 component BookmarkSwitch inherits Rectangle {
     in property <bool> checked;
     callback toggled(bool);
@@ -17,23 +18,6 @@ component BookmarkSwitch inherits Rectangle {
     }
     TouchArea { mouse-cursor: pointer; clicked => { focus.focus(); root.toggled(!root.checked); } }
     focus := FocusScope { focus-on-click: false; key-pressed(event) => { if event.text == " " || event.text == "\n" { root.toggled(!root.checked); return accept; } return reject; } }
-}
-component DestinationRadio inherits Rectangle {
-    in property <string> label;
-    in property <bool> checked;
-    callback selected();
-    height: 40px;
-    accessible-role: radio-button; accessible-label: root.label; accessible-checked: root.checked;
-    accessible-action-default => { root.selected(); }
-    forward-focus: focus;
-    HorizontalLayout { spacing: 10px; alignment: start; cross-axis-alignment: center;
-        Rectangle { width: 18px; height: 18px; border-radius: 9px; border-width: 1px; border-color: root.checked || focus.has-focus ? Theme.accent : Theme.muted;
-            if root.checked : Rectangle { x: 4px; y: 4px; width: 10px; height: 10px; border-radius: 5px; background: Theme.accent; }
-        }
-        Text { text: root.label; color: Theme.text; font-size: 14px; }
-    }
-    TouchArea { mouse-cursor: pointer; clicked => { focus.focus(); root.selected(); } }
-    focus := FocusScope { focus-on-click: false; key-pressed(event) => { if event.text == " " || event.text == "\n" { root.selected(); return accept; } return reject; } }
 }
 export component BookmarksSettings inherits Rectangle {
     in property <bool> enabled: AppState.bookmarks-enabled;
@@ -61,9 +45,9 @@ export component BookmarksSettings inherits Rectangle {
             enable-bookmarks := BookmarkSwitch { checked: root.enabled; toggled(value) => { root.enable-changed(value); } }
         }
         Text { text: "Show Bookmarks in navigation and quick bookmark buttons on videos."; color: Theme.subtle; font-size: 13px; wrap: word-wrap; }
-        automatic := DestinationRadio { label: "Use slintyt-bookmarks"; checked: root.mode == 0; selected => { root.destination-changed(0, ""); } }
+        automatic := RadioButton { label: "Use slintyt-bookmarks"; checked: root.mode == 0; selected => { root.destination-changed(0, ""); } }
         Text { text: "Find the existing playlist or create a private one when enabled."; color: Theme.subtle; font-size: 13px; wrap: word-wrap; }
-        selected := DestinationRadio { label: "Choose playlist"; checked: root.mode == 1; selected => { root.destination-changed(1, ""); } }
+        selected := RadioButton { label: "Choose playlist"; checked: root.mode == 1; selected => { root.destination-changed(1, ""); } }
         if root.mode == 1 : HorizontalLayout { spacing: 8px; alignment: start;
             ActionButton { text: "Choose playlist"; outlined: true; enabled: root.connected; clicked => { root.load-choices(); picker.show(); } }
             ActionButton { icon: "refresh"; tip: "Reload playlists"; quiet: true; enabled: root.connected && !root.busy; clicked => { root.load-choices(); } }

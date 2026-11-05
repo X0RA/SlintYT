@@ -1496,6 +1496,7 @@ fn image_url(url: &str) -> Result<reqwest::Url> {
                 || h.ends_with(".ytimg.com")
                 || h.ends_with(".googleusercontent.com")
                 || h.ends_with(".ggpht.com")
+                || h == "static-cdn.jtvnw.net"
         })
     {
         bail!("Unsupported thumbnail host");

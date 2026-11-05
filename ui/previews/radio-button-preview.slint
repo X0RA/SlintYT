@@ -1,0 +1,12 @@
+import { RadioButton } from "../components/radio-button.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData } from "../state.slint";
+export component AppWindow inherits Window {
+    title: "Radio button preview";
+    width: 360px; height: 180px; background: #0e0e10;
+    private property <int> picked: 0;
+    VerticalLayout { padding: 24px; spacing: 4px; alignment: start;
+        RadioButton { label: "First option"; checked: root.picked == 0; selected => { root.picked = 0; } }
+        RadioButton { label: "Second option"; checked: root.picked == 1; selected => { root.picked = 1; } }
+        RadioButton { label: "A much longer option label to check the spacing"; checked: root.picked == 2; selected => { root.picked = 2; } }
+    }
+}

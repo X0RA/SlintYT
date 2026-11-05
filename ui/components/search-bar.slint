@@ -2,6 +2,9 @@ import { Theme } from "../theme.slint";
 import { Icon } from "icon.slint";
 import { AppState } from "../state.slint";
 export component SearchBar inherits Rectangle {
+    in property <string> placeholder: "Search YouTube";
+    in-out property <string> text;
+    callback submitted(string);
     private property <int> focus-serial: AppState.search-focus-serial;
     changed focus-serial => { search-field.focus(); }
     public function focus-search() { search-field.focus(); }
@@ -11,17 +14,17 @@ export component SearchBar inherits Rectangle {
     drop-shadow-color: #00000088; drop-shadow-blur: 24px; drop-shadow-offset-y: 10px;
     HorizontalLayout {
         padding-left: 18px; padding-right: 16px; spacing: 12px;
-        search-button := Rectangle { width: 20px; accessible-role: button; accessible-label: "Search"; accessible-action-default => { AppState.search(AppState.search-text); }
+        search-button := Rectangle { width: 20px; accessible-role: button; accessible-label: "Search"; accessible-action-default => { root.submitted(root.text); }
             Icon { name: "search"; width: 18px; height: 18px; tint: Theme.subtle; }
-            TouchArea { mouse-cursor: pointer; clicked => { AppState.search(AppState.search-text); } }
+            TouchArea { mouse-cursor: pointer; clicked => { root.submitted(root.text); } }
         }
         Rectangle {
             horizontal-stretch: 1;
-            if AppState.search-text == "" : Text { width: parent.width; height: parent.height; text: "Search YouTube"; color: Theme.subtle; font-size: 14px; vertical-alignment: center; }
+            if root.text == "" : Text { width: parent.width; height: parent.height; text: root.placeholder; color: Theme.subtle; font-size: 14px; vertical-alignment: center; }
             search-field := TextInput {
-                width: parent.width; height: parent.height; text <=> AppState.search-text; color: Theme.text; font-size: 14px; vertical-alignment: center; single-line: true;
-                accessible-label: "Search YouTube";
-                accepted => { AppState.search(self.text); }
+                width: parent.width; height: parent.height; text <=> root.text; color: Theme.text; font-size: 14px; vertical-alignment: center; single-line: true;
+                accessible-label: root.placeholder;
+                accepted => { root.submitted(self.text); }
             }
         }
         Rectangle { width: max(22px, slash.preferred-width + 14px); height: 20px; cross-axis-self-alignment: center; border-radius: 6px; border-width: 1px; border-color: Theme.border;

@@ -8,6 +8,8 @@ use tokio::{
 };
 use zeroize::Zeroizing;
 
+pub(super) const TWITCH_REFERER: &str = "https://www.twitch.tv/";
+
 #[derive(Clone, Deserialize)]
 pub struct Media {
     pub(super) streams: Vec<String>,
@@ -21,20 +23,20 @@ pub struct Media {
 impl Media {
     pub fn source(&self) -> Result<String> {
         if self.streams.is_empty() || self.streams.len() > 2 {
-            bail!("YouTube did not return playable streams.");
+            bail!("No playable streams were returned.");
         }
         for stream in &self.streams {
             let url = reqwest::Url::parse(stream)
-                .map_err(|_| anyhow::anyhow!("YouTube returned an invalid stream."))?;
+                .map_err(|_| anyhow::anyhow!("An invalid stream was returned."))?;
             if !matches!(url.scheme(), "https" | "http") {
-                bail!("YouTube returned an unsupported stream.");
+                bail!("An unsupported stream was returned.");
             }
         }
         if [&self.user_agent, &self.referer]
             .iter()
             .any(|s| s.contains(['\r', '\n', '\0']))
         {
-            bail!("YouTube returned invalid playback headers.");
+            bail!("Invalid playback headers were returned.");
         }
         if self.streams.len() == 1 {
             return Ok(self.streams[0].clone());
@@ -56,6 +58,16 @@ pub fn valid_id(id: &str) -> bool {
         && id
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+}
+
+/// Twitch videos play through the same player under an ID like `twitch:123`.
+pub fn twitch_id(id: &str) -> Option<&str> {
+    id.strip_prefix("twitch:")
+        .filter(|video| !video.is_empty() && video.bytes().all(|b| b.is_ascii_digit()))
+}
+
+pub fn playable_id(id: &str) -> bool {
+    valid_id(id) || twitch_id(id).is_some()
 }
 
 /// A normal lookup never probes media. Recovery is bounded to public URLs,
@@ -130,7 +142,8 @@ async fn catalogue_with(
     mode: Mode,
     timeout: Duration,
 ) -> Result<super::quality::Catalogue> {
-    let signed_in = mode != Mode::Public && !session_config(cookies)?.is_empty();
+    let signed_in =
+        twitch_id(id).is_none() && mode != Mode::Public && !session_config(cookies)?.is_empty();
     tokio::time::timeout(timeout, async {
         let attempt = async |cookies: &str, timeout| {
             let output = extract(
@@ -142,7 +155,12 @@ async fn catalogue_with(
                 &StreamSelection::default(),
             )
             .await?;
-            super::quality::parse(&output)
+            let catalogue = super::quality::parse(&output)?;
+            Ok::<_, anyhow::Error>(if twitch_id(id).is_some() {
+                catalogue.for_twitch()
+            } else {
+                catalogue
+            })
         };
         match attempt(
             if signed_in { cookies } else { "" },
@@ -167,10 +185,11 @@ async fn resolve_with(
     selection: &StreamSelection,
     mode: Mode,
 ) -> Result<Lookup> {
-    if !valid_id(id) {
+    if !playable_id(id) {
         bail!("This video has an invalid YouTube ID.");
     }
-    let signed_in = mode != Mode::Public && !session_config(cookies)?.is_empty();
+    let signed_in =
+        twitch_id(id).is_none() && mode != Mode::Public && !session_config(cookies)?.is_empty();
     let check = mode == Mode::Verified;
     // Signed-in first. Public is a fallback, never an unconditional second
     // extraction. Both attempts share a deadline; cancellation kills the child.
@@ -270,11 +289,14 @@ async fn run(
     check: bool,
 ) -> Result<Lookup> {
     let output = extract(executable, id, cookies, check, timeout, selection).await?;
-    Ok(Lookup {
-        media: parse_media(&output)?,
-        // A malformed catalogue must not prevent an otherwise playable video.
-        catalogue: super::quality::parse(&output).map_err(|error| error.to_string()),
-    })
+    let mut media = parse_media(&output)?;
+    // A malformed catalogue must not prevent an otherwise playable video.
+    let mut catalogue = super::quality::parse(&output).map_err(|error| error.to_string());
+    if twitch_id(id).is_some() {
+        media.referer = TWITCH_REFERER.into();
+        catalogue = catalogue.map(super::quality::Catalogue::for_twitch);
+    }
+    Ok(Lookup { media, catalogue })
 }
 
 async fn extract(
@@ -285,10 +307,18 @@ async fn extract(
     timeout: Duration,
     selection: &StreamSelection,
 ) -> Result<Zeroizing<Vec<u8>>> {
-    if !valid_id(id) {
-        bail!("This video has an invalid YouTube ID.");
-    }
-    let config = session_config(cookies)?;
+    let (url, config) = match twitch_id(id) {
+        // YouTube cookies must never reach another site.
+        Some(video) => (
+            format!("https://www.twitch.tv/videos/{video}"),
+            Zeroizing::new(String::new()),
+        ),
+        None if valid_id(id) => (
+            format!("https://www.youtube.com/watch?v={id}"),
+            session_config(cookies)?,
+        ),
+        None => bail!("This video has an invalid YouTube ID."),
+    };
     let mut command = Command::new(executable);
     #[cfg(target_os = "macos")]
     {
@@ -330,7 +360,7 @@ async fn extract(
             "--dump-single-json",
             "--",
         ])
-        .arg(format!("https://www.youtube.com/watch?v={id}"))
+        .arg(url)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -415,7 +445,7 @@ fn parse_media(output: &[u8]) -> Result<Media> {
         .to_owned();
     let first = formats
         .first()
-        .context("YouTube did not return playable streams.")?;
+        .context("No playable streams were returned.")?;
     let user_agent = if info.http_headers.user_agent.is_empty() {
         first.http_headers.user_agent.clone()
     } else {
@@ -443,6 +473,23 @@ fn parse_media(output: &[u8]) -> Result<Media> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn twitch_ids_are_numbers_with_a_prefix() {
+        assert_eq!(twitch_id("twitch:2918875697"), Some("2918875697"));
+        for id in [
+            "twitch:",
+            "twitch:12a",
+            "twitch:1 --exec",
+            "2918875697",
+            "abcdefghijk",
+        ] {
+            assert_eq!(twitch_id(id), None);
+        }
+        assert!(playable_id("twitch:1"));
+        assert!(playable_id("abcdefghijk"));
+        assert!(!playable_id("twitch:x"));
+    }
 
     #[test]
     fn session_is_supplied_as_one_quoted_stdin_option_with_youtube_scope() {

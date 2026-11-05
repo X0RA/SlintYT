@@ -5,6 +5,7 @@ import { BrowserPicker } from "views/browser-picker.slint";
 import { VideoFeed } from "views/video-feed.slint";
 import { VideoPlayer } from "views/video-player.slint";
 import { SettingsPage } from "views/settings.slint";
+import { TwitchPage } from "views/twitch-page.slint";
 import { AppLoading } from "components/app-loading.slint";
 import { NavRail } from "components/nav-rail.slint";
 import { SyncMenu } from "components/sync-menu.slint";
@@ -22,7 +23,7 @@ export component AppContent inherits Rectangle {
     private property <int> other-profiles: max(0, AppState.saved-profiles.length - (AppState.active-profile >= 0 && AppState.active-profile < AppState.saved-profiles.length ? 1 : 0));
     // Space kept clear for the floating search bar. Feeds scroll underneath it.
     private property <length> inset: 24px + 48px + 32px;
-    private property <int> active: AppState.settings-open ? 7 : AppState.view-kind;
+    private property <int> active: AppState.settings-open ? 7 : AppState.twitch-open ? 10 : AppState.view-kind;
     init => { app-keys.focus(); }
     // Saved-profile index awaiting a second click to remove, or -2.
     private property <int> confirm-remove: -2;
@@ -36,8 +37,10 @@ export component AppContent inherits Rectangle {
         AppState.sync-menu-open = false;
         AppState.player-sidebar-open = false;
         if AppState.player-open { AppState.player-close(); }
+        if kind == 10 { AppState.twitch-user-open = false; }
         if root.active == kind && !AppState.settings-open { AppState.scroll-reset += 1; return; }
         AppState.settings-open = kind == 7;
+        AppState.twitch-open = kind == 10;
         if kind == 0 { AppState.load-feed(false); }
         else if kind == 1 { AppState.load-feed(true); }
         else if kind == 3 { AppState.open-playlists(); }
@@ -70,14 +73,15 @@ export component AppContent inherits Rectangle {
             x: root.narrow ? 0px : 80px; y: 0px;
             width: parent.width - self.x; height: parent.height - (root.narrow ? 72px : 0px);
             VerticalLayout {
-                padding-top: AppState.settings-open ? root.inset : 0px;
+                padding-top: AppState.settings-open ? 24px : 0px;
                 padding-left: root.narrow ? 16px : 32px; padding-right: root.narrow ? 16px : 32px; padding-bottom: 0px;
                 if AppState.settings-open : SettingsPage {}
-                if !AppState.settings-open : VideoFeed { top-inset: root.inset; }
+                if !AppState.settings-open && AppState.twitch-open : TwitchPage {}
+                if !AppState.settings-open && !AppState.twitch-open : VideoFeed { top-inset: root.inset; }
             }
-            HorizontalLayout {
+            if !AppState.settings-open && !AppState.twitch-open : HorizontalLayout {
                 y: 24px; height: 48px; padding-left: root.narrow ? 16px : 32px; padding-right: self.padding-left; alignment: center;
-                search := SearchBar { width: min(600px, parent.width - parent.padding-left * 2); }
+                search := SearchBar { width: min(600px, parent.width - parent.padding-left * 2); text <=> AppState.search-text; submitted(query) => { AppState.search(query); } }
             }
         }
     }

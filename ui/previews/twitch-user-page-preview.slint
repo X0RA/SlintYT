@@ -1,0 +1,29 @@
+import { TwitchUserPage } from "../views/twitch-user-page.slint";
+import { AppState } from "../state.slint";
+import { Button } from "std-widgets.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData, TwitchResult } from "../state.slint";
+export component AppWindow inherits Window {
+    title: "Twitch user page preview";
+    preferred-width: 1000px; height: 720px; min-width: 460px; background: #0e0e10;
+    function clear() { AppState.twitch-user-busy = false; AppState.twitch-user-error = ""; AppState.twitch-user-note = ""; AppState.twitch-user-videos = []; }
+    function videos() { root.clear(); AppState.twitch-user-videos = [
+        { id: "1", title: "Any% world record attempts", subtitle: "GamesDoneQuick", metadata: "Celeste · 12.5K views · 2026-11-04", duration: "1:50:31" },
+        { id: "2", title: "A very long video title that should elide because it does not fit inside the available width of this row at all", subtitle: "GamesDoneQuick", metadata: "1 view · 2026-01-02", duration: "12:04" },
+    ]; }
+    init => {
+        AppState.twitch-user-name = "GamesDoneQuick"; AppState.twitch-user-initials = "GD";
+        AppState.twitch-user-meta = "@gamesdonequick · 2.1M followers";
+        AppState.twitch-user-description = "Games Done Quick is a series of events and daily broadcasts with the goal of spreading the joy of speedrunning. This mock description is long enough to wrap onto a second line.";
+        root.videos();
+    }
+    VerticalLayout {
+        TwitchUserPage { vertical-stretch: 1; }
+        HorizontalLayout { height: 44px; spacing: 8px; padding: 4px;
+            Button { text: "Videos"; clicked => { root.videos(); } }
+            Button { text: "Loading"; clicked => { root.clear(); AppState.twitch-user-busy = true; } }
+            Button { text: "None"; clicked => { root.clear(); } }
+            Button { text: "Error"; clicked => { root.clear(); AppState.twitch-user-error = "This Twitch user could not be found."; } }
+            Button { text: "Filter limit"; clicked => { root.videos(); AppState.twitch-user-filter = "marathon"; AppState.twitch-user-note = "Searched the 1000 most recently loaded videos."; } }
+        }
+    }
+}

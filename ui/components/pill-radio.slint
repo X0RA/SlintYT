@@ -1,0 +1,19 @@
+import { Theme } from "../theme.slint";
+// Large rounded text button styled after the search bar. Fills orange when selected.
+export component PillRadio inherits Rectangle {
+    in property <string> label;
+    in property <bool> checked;
+    callback selected();
+    height: 48px; min-width: text.preferred-width + 44px; horizontal-stretch: 0;
+    border-radius: 26px; border-width: 1px;
+    border-color: root.checked ? Theme.accent : touch.has-hover || focus.has-focus ? #44444e : Theme.border;
+    background: root.checked ? Theme.accent : #1a1a1e;
+    drop-shadow-color: #00000088; drop-shadow-blur: 24px; drop-shadow-offset-y: 10px;
+    accessible-role: radio-button; accessible-label: root.label; accessible-checked: root.checked;
+    accessible-action-default => { root.selected(); }
+    forward-focus: focus;
+    animate background, border-color { duration: 120ms; }
+    text := Text { text: root.label; color: root.checked ? white : Theme.text; font-size: 14px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { focus.focus(); root.selected(); } }
+    focus := FocusScope { focus-on-click: false; key-pressed(event) => { if event.text == " " || event.text == "\n" { root.selected(); return accept; } return reject; } }
+}

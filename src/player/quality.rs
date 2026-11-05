@@ -87,6 +87,18 @@ struct Info {
     captions: subtitles::Info,
 }
 
+impl Catalogue {
+    /// Twitch gets a plain quality list, with no captions or timeline previews.
+    pub(super) fn for_twitch(mut self) -> Self {
+        self.subtitles.clear();
+        self.storyboards.clear();
+        for media in self.options.iter_mut().filter_map(|q| q.media.as_mut()) {
+            media.referer = super::resolve::TWITCH_REFERER.into();
+        }
+        self
+    }
+}
+
 pub(super) fn parse(bytes: &[u8]) -> Result<Catalogue> {
     let info: Info = serde_json::from_slice(bytes)
         .map_err(|_| anyhow::anyhow!("Could not read the video quality list."))?;
@@ -164,7 +176,7 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Catalogue> {
             if media.source().is_ok() {
                 Some(media)
             } else {
-                unavailable = "YouTube returned an invalid URL or headers for this format.".into();
+                unavailable = "This format has an invalid URL or headers.".into();
                 None
             }
         } else {
@@ -178,7 +190,7 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Catalogue> {
         });
     }
     if options.is_empty() {
-        bail!("YouTube returned no video quality options.");
+        bail!("No video quality options were returned.");
     }
     Ok(Catalogue {
         options,

@@ -362,6 +362,10 @@ pub(super) fn wire(
         ui.set_player_channel_id("".into());
         ui.set_player_liked(false);
         ui.set_player_subscribed(false);
+        if id.starts_with("twitch:") {
+            ui.set_details_loading(false);
+            return;
+        }
         let session = sessions.read().unwrap().clone();
         let (weak, data, id) = (weak.clone(), data.clone(), id.to_string());
         rt.spawn(async move {

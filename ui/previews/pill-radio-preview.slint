@@ -1,0 +1,18 @@
+import { PillRadio } from "../components/pill-radio.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData, TwitchResult } from "../state.slint";
+export component AppWindow inherits Window {
+    title: "Pill radio preview";
+    width: 560px; height: 180px; background: #0e0e10;
+    private property <int> picked: 0;
+    VerticalLayout { padding: 24px; spacing: 16px; alignment: start;
+        HorizontalLayout { spacing: 12px; alignment: start;
+            PillRadio { label: "Video"; checked: root.picked == 0; selected => { root.picked = 0; } }
+            PillRadio { label: "User"; checked: root.picked == 1; selected => { root.picked = 1; } }
+        }
+        HorizontalLayout { spacing: 12px; alignment: start;
+            PillRadio { label: "Past broadcasts"; checked: root.picked == 2; selected => { root.picked = 2; } }
+            PillRadio { label: "Highlights"; checked: root.picked == 3; selected => { root.picked = 3; } }
+            PillRadio { label: "Uploads"; checked: root.picked == 4; selected => { root.picked = 4; } }
+        }
+    }
+}

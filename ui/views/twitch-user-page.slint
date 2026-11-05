@@ -1,0 +1,65 @@
+import { ScrollView, Spinner } from "std-widgets.slint";
+import { Theme } from "../theme.slint";
+import { AppState } from "../state.slint";
+import { Avatar } from "../components/avatar.slint";
+import { BackLink } from "../components/back-link.slint";
+import { Choice } from "../components/choice.slint";
+import { PillRadio } from "../components/pill-radio.slint";
+import { SearchBar } from "../components/search-bar.slint";
+import { TwitchResultRow } from "../components/twitch-result-row.slint";
+export component TwitchUserPage inherits Rectangle {
+    private property <bool> narrow: root.width < 700px;
+    private property <[string]> tabs: ["Past broadcasts", "Highlights", "Uploads"];
+    private property <string> filter: AppState.twitch-user-filter;
+    changed filter => { AppState.twitch-user-filter-changed(); }
+    function select-tab(tab: int) {
+        if AppState.twitch-user-tab == tab { return; }
+        AppState.twitch-user-tab = tab;
+        AppState.twitch-user-reload();
+    }
+    background: Theme.background;
+    // More videos load as the page nears its end, the same way the feeds do.
+    Timer {
+        interval: 250ms;
+        running: AppState.twitch-user-more && !AppState.twitch-user-busy && AppState.twitch-user-error == ""
+            && -page.content-y + page.visible-height >= page.content-height - 900px;
+        triggered => { AppState.twitch-user-load-more(); }
+    }
+    page := ScrollView {
+        horizontal-scrollbar-policy: always-off;
+        VerticalLayout {
+            width: page.visible-width;
+            padding-top: 16px; padding-bottom: 32px; padding-right: 12px; spacing: 16px; alignment: start;
+            twitch-back := BackLink { text: "Back to search"; clicked => { AppState.twitch-user-open = false; } }
+            HorizontalLayout { spacing: 20px; cross-axis-alignment: center;
+                Avatar { width: 80px; initials: AppState.twitch-user-initials; tone: AppState.twitch-user-tone; url: AppState.twitch-user-avatar; accessible-role: none; }
+                VerticalLayout { horizontal-stretch: 1; alignment: center; spacing: 6px;
+                    Text { text: AppState.twitch-user-name; color: Theme.text; font-size: 26px; font-weight: 700; overflow: elide; }
+                    Text { text: AppState.twitch-user-meta; color: Theme.muted; font-size: 13px; overflow: elide; }
+                    if AppState.twitch-user-description != "" : Text { text: AppState.twitch-user-description; color: Theme.subtle; font-size: 13px; wrap: word-wrap; }
+                }
+            }
+            HorizontalLayout { spacing: 12px; alignment: start;
+                for tab[index] in root.tabs : PillRadio { label: tab; checked: AppState.twitch-user-tab == index; selected => { root.select-tab(index); } }
+            }
+            HorizontalLayout { height: 48px; spacing: 12px; alignment: start; cross-axis-alignment: center;
+                twitch-user-search := SearchBar { width: min(600px, max(100px, root.width - 200px)); placeholder: "Search " + root.tabs[AppState.twitch-user-tab]; text <=> AppState.twitch-user-filter; }
+                twitch-user-sort := Choice { options: ["Newest", "Most viewed"]; label: "Sort videos"; current-index <=> AppState.twitch-user-sort; selected => { AppState.twitch-user-reload(); } }
+            }
+            VerticalLayout { spacing: 0px;
+                for item in AppState.twitch-user-videos : TwitchResultRow {
+                    item: item; narrow: root.narrow;
+                    activate => { AppState.twitch-play(item.id, item.title, AppState.twitch-user-name); }
+                }
+            }
+            if AppState.twitch-user-note != "" : Text { text: AppState.twitch-user-note; color: Theme.subtle; font-size: 13px; horizontal-alignment: center; }
+            if AppState.twitch-user-error != "" : Text { text: AppState.twitch-user-error; color: #ffaaa5; font-size: 14px; wrap: word-wrap; horizontal-alignment: center; }
+            if AppState.twitch-user-busy : HorizontalLayout { height: 64px; alignment: center; Spinner { width: 24px; height: 24px; } }
+            if AppState.twitch-user-videos.length == 0 && !AppState.twitch-user-busy && AppState.twitch-user-error == "" : Text {
+                height: 120px;
+                text: AppState.twitch-user-filter != "" ? "No matching videos." : "No " + root.tabs[AppState.twitch-user-tab] + " found.";
+                color: Theme.muted; font-size: 15px; horizontal-alignment: center; vertical-alignment: center;
+            }
+        }
+    }
+}

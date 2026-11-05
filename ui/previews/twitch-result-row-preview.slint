@@ -1,0 +1,12 @@
+import { TwitchResultRow } from "../components/twitch-result-row.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData, TwitchResult } from "../state.slint";
+export component AppWindow inherits Window {
+    title: "Twitch result row preview";
+    preferred-width: 800px; height: 480px; background: #0e0e10;
+    VerticalLayout { padding: 24px; alignment: start;
+        TwitchResultRow { item: { title: "Any% world record attempts", subtitle: "GamesDoneQuick", metadata: "Celeste · 12.5K views · 2026-11-04", duration: "1:50:31" }; }
+        TwitchResultRow { item: { title: "A very long video title that should elide because it does not fit inside the available width of this row at all", subtitle: "A channel with a long name", metadata: "No game listed · 1 view · 2026-01-02" }; }
+        TwitchResultRow { user: true; item: { title: "GamesDoneQuick", subtitle: "@gamesdonequick · 2.1M followers", metadata: "Replay of the marathon", initials: "GD", tone: #3b4a63 }; }
+        TwitchResultRow { user: true; item: { title: "quietstreamer", subtitle: "@quietstreamer · 1 follower", initials: "QS", tone: #4a3a3a }; }
+    }
+}

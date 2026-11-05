@@ -1,0 +1,18 @@
+import { Theme } from "../theme.slint";
+export component RadioButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> checked;
+    callback selected();
+    height: 40px; min-width: layout.preferred-width;
+    accessible-role: radio-button; accessible-label: root.label; accessible-checked: root.checked;
+    accessible-action-default => { root.selected(); }
+    forward-focus: focus;
+    layout := HorizontalLayout { spacing: 10px; alignment: start; cross-axis-alignment: center;
+        Rectangle { width: 18px; height: 18px; border-radius: 9px; border-width: 1px; border-color: root.checked || focus.has-focus ? Theme.accent : Theme.muted;
+            if root.checked : Rectangle { x: 4px; y: 4px; width: 10px; height: 10px; border-radius: 5px; background: Theme.accent; }
+        }
+        Text { text: root.label; color: Theme.text; font-size: 14px; }
+    }
+    TouchArea { mouse-cursor: pointer; clicked => { focus.focus(); root.selected(); } }
+    focus := FocusScope { focus-on-click: false; key-pressed(event) => { if event.text == " " || event.text == "\n" { root.selected(); return accept; } return reject; } }
+}

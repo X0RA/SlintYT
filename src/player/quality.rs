@@ -14,7 +14,9 @@ use std::{
 #[derive(Clone)]
 pub struct Quality {
     pub key: String,
-    pub label: String,
+    /// The menu row's title, and the line of detail under it.
+    pub title: String,
+    pub detail: String,
     pub media: Option<Media>,
     pub unavailable: String,
 }
@@ -45,6 +47,8 @@ struct Format {
     acodec: String,
     height: Option<u32>,
     fps: Option<f64>,
+    tbr: Option<f64>,
+    format_note: Option<String>,
     #[serde(default)]
     ext: String,
     #[serde(default)]
@@ -87,19 +91,82 @@ struct Info {
     captions: subtitles::Info,
 }
 
-impl Catalogue {
-    /// Twitch gets a plain quality list, with no captions or timeline previews.
-    pub(super) fn for_twitch(mut self) -> Self {
-        self.subtitles.clear();
-        self.storyboards.clear();
-        for media in self.options.iter_mut().filter_map(|q| q.media.as_mut()) {
-            media.referer = super::resolve::TWITCH_REFERER.into();
-        }
-        self
+impl Format {
+    /// YouTube rows read "1080p 60fps" over codecs, container, protocol and ID.
+    fn youtube_label(&self, audio_codec: &str) -> (String, String) {
+        let size = self
+            .height
+            .map_or_else(|| "Video".into(), |h| format!("{h}p"));
+        let rate = self.fps.map_or(String::new(), |fps| format!(" {fps}fps"));
+        let language = self
+            .language
+            .as_ref()
+            .map_or(String::new(), |v| format!(" · {v}"));
+        let range = self
+            .dynamic_range
+            .as_ref()
+            .map_or(String::new(), |value| format!(" · {value}"));
+        (
+            format!("{size}{rate}"),
+            format!(
+                "{} + {audio_codec} · {} · {} · {}{range}{language}",
+                self.vcodec, self.ext, self.protocol, self.format_id
+            ),
+        )
+    }
+
+    /// Twitch rows use twitch.tv's own names such as "720p60", over the
+    /// bitrate. Every Twitch stream is H.264, so the codec says nothing.
+    fn twitch_label(&self) -> (String, String) {
+        let named = self
+            .format_id
+            .split_once('p')
+            .is_some_and(|(height, rate)| {
+                !height.is_empty()
+                    && height.bytes().all(|b| b.is_ascii_digit())
+                    && rate.bytes().all(|b| b.is_ascii_digit())
+            });
+        let title = if named {
+            self.format_id.clone()
+        } else {
+            let size = self
+                .height
+                .map_or_else(|| "Video".into(), |h| format!("{h}p"));
+            match self.fps.map(f64::round).filter(|fps| *fps >= 50.) {
+                Some(fps) => format!("{size}{fps}"),
+                None => size,
+            }
+        };
+        let source = self.format_note.as_deref() == Some("Source");
+        let rate = self
+            .tbr
+            .filter(|tbr| tbr.is_finite() && *tbr > 0.)
+            .map(|tbr| {
+                if tbr >= 1000. {
+                    format!("{:.1} Mbps", tbr / 1000.)
+                } else {
+                    format!("{tbr:.0} Kbps")
+                }
+            });
+        let detail = [source.then(|| "Source".to_owned()), rate]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" · ");
+        (title, detail)
     }
 }
 
 pub(super) fn parse(bytes: &[u8]) -> Result<Catalogue> {
+    parse_with(bytes, false)
+}
+
+/// Twitch has no captions, and its rows are named and ordered like twitch.tv's.
+pub(super) fn parse_twitch(bytes: &[u8]) -> Result<Catalogue> {
+    parse_with(bytes, true)
+}
+
+fn parse_with(bytes: &[u8], twitch: bool) -> Result<Catalogue> {
     let info: Info = serde_json::from_slice(bytes)
         .map_err(|_| anyhow::anyhow!("Could not read the video quality list."))?;
     // yt-dlp sorts formats by preference, with the best last. Pair video-only
@@ -110,26 +177,26 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Catalogue> {
         .rev()
         .find(|f| !f.video() && f.audio() && f.directly_playable());
     let mut options = Vec::new();
-    for f in info.formats.iter().rev().filter(|f| f.video()) {
-        let size = f.height.map_or_else(|| "Video".into(), |h| format!("{h}p"));
-        let rate = f.fps.map_or(String::new(), |fps| format!(" {fps}fps"));
+    let mut formats: Vec<_> = info.formats.iter().rev().filter(|f| f.video()).collect();
+    if twitch {
+        // yt-dlp orders by the playback preferences, so a capped height would
+        // put Source last. Twitch lists the sharpest stream first.
+        formats.sort_by(|a, b| {
+            let rank = |f: &Format| (f.height.unwrap_or(0), f.fps.unwrap_or(0.).round() as u32);
+            rank(b).cmp(&rank(a))
+        });
+    }
+    for f in formats {
         let audio_codec = if f.audio() {
             f.acodec.as_str()
         } else {
             audio.map_or("no audio", |a| a.acodec.as_str())
         };
-        let language = f
-            .language
-            .as_ref()
-            .map_or(String::new(), |v| format!(" · {v}"));
-        let range = f
-            .dynamic_range
-            .as_ref()
-            .map_or(String::new(), |value| format!(" · {value}"));
-        let label = format!(
-            "{size}{rate} · {} + {audio_codec} · {} · {} · {}{range}{language}",
-            f.vcodec, f.ext, f.protocol, f.format_id
-        );
+        let (title, detail) = if twitch {
+            f.twitch_label()
+        } else {
+            f.youtube_label(audio_codec)
+        };
         let key = format!(
             "{}|{}|{}|{}",
             f.format_id,
@@ -165,7 +232,9 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Catalogue> {
             let media = Media {
                 streams,
                 user_agent: agent.clone(),
-                referer: if referer.is_empty() {
+                referer: if twitch {
+                    super::resolve::TWITCH_REFERER.into()
+                } else if referer.is_empty() {
                     "https://www.youtube.com/".into()
                 } else {
                     referer.clone()
@@ -184,7 +253,8 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Catalogue> {
         };
         options.push(Quality {
             key,
-            label,
+            title,
+            detail,
             media,
             unavailable,
         });
@@ -195,7 +265,11 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Catalogue> {
     Ok(Catalogue {
         options,
         note: String::new(),
-        subtitles: subtitles::tracks(&info.captions),
+        subtitles: if twitch {
+            Vec::new()
+        } else {
+            subtitles::tracks(&info.captions)
+        },
         storyboards: storyboard::parse(bytes).into_iter().map(Arc::new).collect(),
     })
 }
@@ -388,7 +462,8 @@ mod tests {
             .iter()
             .find(|q| q.key.starts_with("4k|"))
             .unwrap();
-        assert!(video.label.contains("2160p 60fps"));
+        assert_eq!(video.title, "2160p 60fps");
+        assert!(video.detail.starts_with("av01 + opus"));
         assert_eq!(video.media.as_ref().unwrap().streams.len(), 2);
         assert!(
             catalogue
@@ -397,6 +472,37 @@ mod tests {
                 .any(|q| q.media.is_none() && q.unavailable.contains("DRM"))
         );
     }
+    #[test]
+    fn twitch_rows_are_named_like_twitch_and_sharpest_first() {
+        // yt-dlp's order with a 720p cap, which puts Source last.
+        let catalogue = parse_twitch(br#"{"duration":2750,"subtitles":{"en":[{"ext":"vtt","url":"https://x.example/a.vtt"}]},"formats":[
+          {"format_id":"Audio_Only","vcodec":"none","acodec":"mp4a.40.2","protocol":"m3u8_native","url":"https://x.example/a.m3u8"},
+          {"format_id":"1080p60","vcodec":"avc1.64002A","acodec":"mp4a.40.2","height":1080,"fps":60.0,"tbr":8591.8,"format_note":"Source","protocol":"m3u8_native","url":"https://x.example/s.m3u8"},
+          {"format_id":"160p","vcodec":"avc1.4D400C","acodec":"mp4a.40.2","height":160,"fps":30.004,"tbr":287.7,"protocol":"m3u8_native","url":"https://x.example/1.m3u8"},
+          {"format_id":"720p","vcodec":"avc1.4D401F","acodec":"mp4a.40.2","height":720,"fps":30.004,"tbr":2270.7,"protocol":"m3u8_native","url":"https://x.example/2.m3u8"},
+          {"format_id":"chunked","vcodec":"avc1","acodec":"mp4a.40.2","height":900,"fps":59.94,"protocol":"m3u8_native","url":"https://x.example/c.m3u8"},
+          {"format_id":"720p60","vcodec":"avc1.4D4020","acodec":"mp4a.40.2","height":720,"fps":60.0,"tbr":3168.8,"protocol":"m3u8_native","url":"https://x.example/3.m3u8"}
+        ]}"#).unwrap();
+        let rows: Vec<_> = catalogue
+            .options
+            .iter()
+            .map(|q| (q.title.as_str(), q.detail.as_str()))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("1080p60", "Source · 8.6 Mbps"),
+                ("900p60", ""),
+                ("720p60", "3.2 Mbps"),
+                ("720p", "2.3 Mbps"),
+                ("160p", "288 Kbps"),
+            ]
+        );
+        assert!(catalogue.subtitles.is_empty());
+        let media = catalogue.options[0].media.as_ref().unwrap();
+        assert_eq!(media.referer, super::super::resolve::TWITCH_REFERER);
+    }
+
     #[test]
     fn a_malformed_storyboard_keeps_the_quality_list() {
         let catalogue = parse(br#"{"duration":100,"formats":[

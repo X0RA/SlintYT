@@ -1,11 +1,17 @@
 import { Theme } from "../theme.slint";
 import { AppState, TwitchResult } from "../state.slint";
 import { Avatar } from "avatar.slint";
+import { BookmarkButton } from "bookmark-button.slint";
 export component TwitchResultRow inherits Rectangle {
     in property <TwitchResult> item;
     in property <bool> user: false;
     in property <bool> narrow: false;
+    // Mock values for previews. The app reads both from the local library.
+    in property <bool> bookmarked: AppState.twitch-bookmarked(root.item.id, AppState.twitch-library-epoch);
+    in property <float> progress: AppState.twitch-progress(root.item.id, AppState.twitch-library-epoch);
     callback activate();
+    callback bookmark-toggle();
+    bookmark-toggle => { AppState.twitch-toggle-bookmark(root.item.id); }
     private property <length> thumb-width: root.narrow ? 120px : 192px;
     // Goes through the avatar downloader, which also caches on disk.
     private property <image> thumbnail: AppState.avatar-image(root.user ? "" : root.item.picture, AppState.avatar-epoch);
@@ -24,6 +30,15 @@ export component TwitchResultRow inherits Rectangle {
                 x: parent.width - self.width - 8px; y: parent.height - self.height - 8px;
                 width: duration.preferred-width + 12px; height: 20px; background: #0a0a0bc7; border-radius: 5px;
                 duration := Text { text: root.item.duration; color: white; font-size: 11px; font-weight: 600; horizontal-alignment: center; vertical-alignment: center; }
+            }
+            if root.progress > 0 : Rectangle {
+                x: 0px; y: parent.height - 3px; width: parent.width; height: 3px; background: #ffffff33;
+                Rectangle { x: 0px; y: 0px; width: parent.width * min(100, root.progress) / 100; height: parent.height; background: Theme.accent; }
+            }
+            twitch-bookmark := BookmarkButton {
+                x: 8px; y: 8px; video-id: root.item.id; reveal: touch.has-hover || root.bookmarked;
+                available: true; membership: root.bookmarked ? 2 : 1; collection: "your Twitch bookmarks";
+                toggled => { root.bookmark-toggle(); }
             }
         }
         VerticalLayout { horizontal-stretch: 1; alignment: center; spacing: 6px;

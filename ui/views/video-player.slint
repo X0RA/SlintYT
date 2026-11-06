@@ -236,6 +236,11 @@ export component VideoPlayer inherits Rectangle {
                                     time := Text { x: 4px; text: root.clock(AppState.player-position) + " / " + (AppState.player-duration > 0 ? root.clock(AppState.player-duration) : "LIVE"); color: #e4e4e7; font-size: 13px; vertical-alignment: center; }
                                 }
                                 Rectangle { horizontal-stretch: 1; }
+                                if AppState.player-twitch : twitch-bookmark := ControlButton {
+                                    property <bool> saved: AppState.twitch-bookmarked(AppState.player-video-id, AppState.twitch-library-epoch);
+                                    icon: self.saved ? "bookmark-filled" : "bookmark"; tip: self.saved ? "Remove bookmark" : "Bookmark video"; pressed-state: self.saved;
+                                    clicked => { AppState.twitch-toggle-bookmark(AppState.player-video-id); }
+                                }
                                 ControlButton { text: AppState.player-speed + "×"; tip: "Playback speed"; active: root.menu == 1; clicked => { root.menu = root.menu == 1 ? 0 : 1; } }
                                 quality-control := ControlButton { text: AppState.player-current-quality != "" ? AppState.player-current-quality : AppState.player-loading ? "Loading…" : "Quality"; tip: AppState.player-current-quality != "" ? "Video quality · " + AppState.player-current-quality : "Video quality"; active: root.menu == 2; clicked => { root.menu = root.menu == 2 ? 0 : 2; } }
                                 if !AppState.player-twitch : subtitles := ControlButton { icon: "subtitles"; tip: AppState.player-subtitle-index > 0 ? "Turn subtitles off (right-click for languages)" : "Choose subtitles"; pressed-state: AppState.player-subtitle-index > 0; active: root.menu == 3;

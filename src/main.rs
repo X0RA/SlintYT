@@ -15,6 +15,7 @@ mod macos_tools;
 mod playback_settings;
 mod player;
 mod twitch;
+mod twitch_library;
 mod updates;
 mod watch;
 mod youtube;

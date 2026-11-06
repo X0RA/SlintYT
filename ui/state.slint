@@ -117,8 +117,17 @@ export global AppState {
     in-out property <bool> twitch-open: false;
     callback set-twitch-enabled(bool);
     in-out property <string> twitch-search-text;
-    // 0 searches videos, 1 searches users.
+    // 0 searches videos, 1 searches users, 2 lists local bookmarks.
     in-out property <int> twitch-search-mode: 0;
+    // Bookmarks and watch progress are kept on this computer. The epoch
+    // changes whenever either does, so rows refresh.
+    in-out property <int> twitch-library-epoch: 0;
+    pure callback twitch-bookmarked(string, int) -> bool;
+    // Percent watched, or 0.
+    pure callback twitch-progress(string, int) -> float;
+    callback twitch-toggle-bookmark(string);
+    in-out property <[TwitchResult]> twitch-bookmarks;
+    callback twitch-bookmarks-changed();
     in-out property <[TwitchResult]> twitch-results;
     // What's on screen, which stays put while the search text and radio change.
     in-out property <string> twitch-results-query;
@@ -163,6 +172,8 @@ export global AppState {
     callback playback-prefetch-changed();
     in-out property <bool> playback-previews: true;
     in-out property <int> playback-preview-quality: 0;
+    // 0 is Low, which loads in one request, and 1 is High.
+    in-out property <int> playback-twitch-preview-quality: 0;
     callback playback-previews-changed();
     in-out property <string> playback-settings-error;
     // Fields 0–6 follow the rows in Settings → Playback.

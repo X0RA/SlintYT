@@ -1538,7 +1538,10 @@ fn decode_thumbnail(bytes: &[u8]) -> Result<Pixels> {
 
 /// Never saved to disk: a signed-in lookup can return sheets of a private video.
 pub async fn download_sheet(http: &reqwest::Client, url: &str) -> Result<Vec<u8>> {
-    thumbnail_bytes(http, &image_url(url)?).await
+    if !crate::player::storyboard::allowed(url) {
+        bail!("Unsupported storyboard host");
+    }
+    thumbnail_bytes(http, &reqwest::Url::parse(url)?).await
 }
 
 /// Stays at full size, since a sheet's frames are addressed by pixel.

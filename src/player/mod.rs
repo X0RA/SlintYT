@@ -9,7 +9,7 @@ mod render;
 mod resolve;
 #[cfg(test)]
 mod smoke;
-mod storyboard;
+pub(crate) mod storyboard;
 mod subtitles;
 
 use crate::{AppState, AppWindow};
@@ -113,24 +113,29 @@ fn show_qualities(app: &AppWindow, owner: &Arc<Playback>, catalogue: quality::Ca
         .as_ref()
         .and_then(|key| catalogue.options.iter().position(|q| &q.key == key))
         .map_or(0, |i| i as i32 + 1);
-    // Labels read "1080p 60fps · codecs · ext · protocol · id"; the menu shows
-    // the resolution as the title and everything after it as the detail line.
+    let state = app.global::<AppState>();
+    // Twitch only offers H.264, so its default only depends on the height.
+    let automatic = if state.get_player_twitch() {
+        match owner.automatic_selection.lock().unwrap().max_height {
+            Some(height) => format!("Up to {height}p"),
+            None => "Best available".into(),
+        }
+    } else {
+        "Preferred quality and codec".into()
+    };
     let mut labels = vec![slint::SharedString::from("Use playback settings")];
-    let mut details = vec![slint::SharedString::from("Preferred quality and codec")];
+    let mut details = vec![slint::SharedString::from(automatic)];
     for option in &catalogue.options {
-        let (title, detail) = option
-            .label
-            .split_once(" · ")
-            .unwrap_or((option.label.as_str(), ""));
-        labels.push(title.into());
-        details.push(if option.unavailable.is_empty() {
-            detail.into()
-        } else {
-            format!("{detail} · unavailable").into()
-        });
+        labels.push(option.title.as_str().into());
+        details.push(
+            match (option.detail.as_str(), option.unavailable.is_empty()) {
+                (detail, true) => detail.into(),
+                ("", false) => "Unavailable".into(),
+                (detail, false) => format!("{detail} · unavailable").into(),
+            },
+        );
     }
     *owner.choices.write().unwrap() = catalogue.options;
-    let state = app.global::<AppState>();
     state.set_player_qualities(slint::ModelRc::new(slint::VecModel::from(labels)));
     state.set_player_quality_details(slint::ModelRc::new(slint::VecModel::from(details)));
     state.set_player_quality_index(index);
@@ -254,10 +259,12 @@ impl Playback {
     fn pick_preview(self: &Arc<Self>, app: &AppWindow) {
         let preferences = self.preferences.read().unwrap().clone();
         let board = if preferences.previews {
-            storyboard::pick(
-                &self.preview_levels.lock().unwrap(),
-                preferences.preview_rank(),
-            )
+            let rank = if app.global::<AppState>().get_player_twitch() {
+                preferences.twitch_preview_rank()
+            } else {
+                preferences.preview_rank()
+            };
+            storyboard::pick(&self.preview_levels.lock().unwrap(), rank)
         } else {
             None
         };
@@ -551,9 +558,13 @@ impl Playback {
         *self.requested_subtitle.lock().unwrap() = start.subtitle.clone();
         let state = app.global::<AppState>();
         let preferences = self.preferences.read().unwrap().clone();
-        // Twitch has no account session here, so no resume, history or YouTube metadata.
+        // Twitch has no account session here, so its progress is kept locally
+        // and there's no YouTube history or metadata.
         let twitch = resolve::twitch_id(&id).is_some();
         let restore = start.restore && preferences.resume && !twitch;
+        let local_resume = (twitch && start.restore && preferences.resume)
+            .then(|| crate::twitch_library::shared().resume(&id))
+            .flatten();
         state.set_player_twitch(twitch);
         let speed = if start.new_video {
             preferences.speed
@@ -561,7 +572,11 @@ impl Playback {
             state.get_player_speed()
         };
         if start.new_video {
-            *self.automatic_selection.lock().unwrap() = preferences.selection();
+            *self.automatic_selection.lock().unwrap() = if twitch {
+                preferences.twitch_selection()
+            } else {
+                preferences.selection()
+            };
         }
         let mut selection = self.automatic_selection.lock().unwrap().clone();
         if let Some(key) = &start.quality {
@@ -634,7 +649,7 @@ impl Playback {
             cookies
         };
         if !resolve::playable_id(&id) {
-            fail(app, "This video has an invalid YouTube ID.");
+            fail(app, "This video has an invalid ID.");
             return;
         }
         let epoch = self.epoch.load(Ordering::Relaxed);
@@ -714,6 +729,8 @@ impl Playback {
                     .and_then(|info| info.as_ref().ok())
                     .and_then(|info| info.resume)
                     .unwrap_or(0.) as f32
+            } else if let Some(position) = local_resume {
+                position as f32
             } else {
                 start.position
             };

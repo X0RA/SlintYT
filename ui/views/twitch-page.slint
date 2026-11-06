@@ -8,34 +8,42 @@ import { TwitchResultRow } from "../components/twitch-result-row.slint";
 import { TwitchUserPage } from "twitch-user-page.slint";
 component TwitchSearch inherits Rectangle {
     private property <bool> narrow: root.width < 700px;
-    private property <bool> empty: AppState.twitch-results.length == 0;
+    // Bookmarks are local, so the search bar filters them instead of searching.
+    private property <bool> bookmarks: AppState.twitch-search-mode == 2;
+    private property <bool> empty: root.bookmarks ? AppState.twitch-bookmarks.length == 0 : AppState.twitch-results.length == 0;
+    private property <string> text: AppState.twitch-search-text;
+    changed text => { if root.bookmarks { AppState.twitch-bookmarks-changed(); } }
+    init => { if root.bookmarks { AppState.twitch-bookmarks-changed(); } }
     function search(query: string) {
         results.content-y = 0px;
-        AppState.twitch-search(query);
+        if root.bookmarks { AppState.twitch-bookmarks-changed(); } else { AppState.twitch-search(query); }
     }
     // Switching the mode re-runs a search that's already on screen.
     function select-mode(mode: int) {
         if AppState.twitch-search-mode == mode { return; }
         AppState.twitch-search-mode = mode;
         AppState.twitch-sort = 0;
-        if AppState.twitch-results-query != "" { root.search(AppState.twitch-search-text); }
+        results.content-y = 0px;
+        if mode == 2 { AppState.twitch-bookmarks-changed(); }
+        else if AppState.twitch-results-query != "" { root.search(AppState.twitch-search-text); }
     }
     // More results load as the page nears its end, the same way the feeds do.
     Timer {
         interval: 250ms;
-        running: AppState.twitch-cursor != "" && !AppState.twitch-busy && AppState.twitch-error == ""
+        running: !root.bookmarks && AppState.twitch-cursor != "" && !AppState.twitch-busy && AppState.twitch-error == ""
             && -results.content-y + results.visible-height >= results.content-height - 900px;
         triggered => { AppState.twitch-load-more(); }
     }
     VerticalLayout { padding-top: 24px; spacing: 16px;
         HorizontalLayout { height: 48px; alignment: center; spacing: 12px;
-            twitch-search := SearchBar { width: min(600px, max(100px, root.width - 220px)); placeholder: "Search Twitch"; text <=> AppState.twitch-search-text; submitted(query) => { root.search(query); } }
+            twitch-search := SearchBar { width: min(600px, max(100px, root.width - 340px)); placeholder: root.bookmarks ? "Search bookmarks" : "Search Twitch"; text <=> AppState.twitch-search-text; submitted(query) => { root.search(query); } }
             twitch-video := PillRadio { label: "Video"; checked: AppState.twitch-search-mode == 0; selected => { root.select-mode(0); } }
             twitch-user := PillRadio { label: "User"; checked: AppState.twitch-search-mode == 1; selected => { root.select-mode(1); } }
+            twitch-bookmarks := PillRadio { label: "Bookmarks"; checked: root.bookmarks; selected => { root.select-mode(2); } }
         }
-        if AppState.twitch-results-query != "" : HorizontalLayout { alignment: start;
+        if root.bookmarks || AppState.twitch-results-query != "" : HorizontalLayout { alignment: start;
             twitch-sort := Choice {
-                options: AppState.twitch-search-mode == 1 ? ["Relevance", "Most followers", "Name"] : ["Relevance", "Most viewed", "Newest", "Longest"];
+                options: root.bookmarks ? ["Recently added", "Recently watched", "Channel"] : AppState.twitch-search-mode == 1 ? ["Relevance", "Most followers", "Name"] : ["Relevance", "Most viewed", "Newest", "Longest"];
                 label: "Sort results"; current-index <=> AppState.twitch-sort;
                 selected => { results.content-y = 0px; AppState.twitch-sort-changed(); }
             }
@@ -46,19 +54,28 @@ component TwitchSearch inherits Rectangle {
             VerticalLayout {
                 width: results.visible-width;
                 padding-bottom: 32px; spacing: 0px; alignment: start;
-                for item in AppState.twitch-results : TwitchResultRow {
-                    item: item; user: AppState.twitch-results-mode == 1; narrow: root.narrow;
-                    activate => {
-                        if AppState.twitch-results-mode == 1 { AppState.twitch-open-user(item); }
-                        else { AppState.twitch-play(item.id, item.title, item.subtitle); }
+                if !root.bookmarks : VerticalLayout {
+                    for item in AppState.twitch-results : TwitchResultRow {
+                        item: item; user: AppState.twitch-results-mode == 1; narrow: root.narrow;
+                        activate => {
+                            if AppState.twitch-results-mode == 1 { AppState.twitch-open-user(item); }
+                            else { AppState.twitch-play(item.id, item.title, item.subtitle); }
+                        }
                     }
                 }
-                if AppState.twitch-error != "" : Text { text: AppState.twitch-error; color: #ffaaa5; font-size: 14px; wrap: word-wrap; horizontal-alignment: center; }
-                if AppState.twitch-busy : HorizontalLayout { height: 64px; alignment: center; Spinner { width: 24px; height: 24px; } }
-                if root.empty && !AppState.twitch-busy && AppState.twitch-error == "" : Text {
+                if root.bookmarks : VerticalLayout {
+                    for item in AppState.twitch-bookmarks : TwitchResultRow {
+                        item: item; narrow: root.narrow;
+                        activate => { AppState.twitch-play(item.id, item.title, item.subtitle); }
+                    }
+                }
+                if !root.bookmarks && AppState.twitch-error != "" : Text { text: AppState.twitch-error; color: #ffaaa5; font-size: 14px; wrap: word-wrap; horizontal-alignment: center; }
+                if !root.bookmarks && AppState.twitch-busy : HorizontalLayout { height: 64px; alignment: center; Spinner { width: 24px; height: 24px; } }
+                if root.empty && (root.bookmarks || (!AppState.twitch-busy && AppState.twitch-error == "")) : Text {
                     height: 120px;
-                    text: AppState.twitch-results-query == "" ? "Search for Twitch videos or users." : "No results for “" + AppState.twitch-results-query + "”.";
-                    color: Theme.muted; font-size: 15px; horizontal-alignment: center; vertical-alignment: center; overflow: elide;
+                    text: root.bookmarks ? (AppState.twitch-search-text != "" ? "No matching bookmarks." : "No bookmarks yet. Hover over a video and press the bookmark button to keep it here.")
+                        : AppState.twitch-results-query == "" ? "Search for Twitch videos or users." : "No results for “" + AppState.twitch-results-query + "”.";
+                    color: Theme.muted; font-size: 15px; horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap;
                 }
             }
         }

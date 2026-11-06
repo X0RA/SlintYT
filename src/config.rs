@@ -249,6 +249,7 @@ mod tests {
             prefetch: true,
             previews: false,
             preview_quality: PreviewQuality::Low,
+            twitch_preview_quality: crate::playback_settings::TwitchPreviewQuality::High,
         };
         store.save_playback(&preferences).unwrap();
         assert!(store.load_settings().unwrap().bookmarks_enabled);

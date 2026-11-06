@@ -39,6 +39,24 @@ curl -s -X POST http://127.0.0.1:9315/mcp -H "Content-Type: application/json" \
 
 Typical flow is `list_windows` then `get_window_properties` (gives the root element handle) then `get_element_tree` (start with `maxElements` around 50) then `query_element_descendants` / `find_elements_by_id` / `get_element_properties` to drill in, and `click_element`, `set_element_value`, `dispatch_key_event`, `drag_element` to interact. Window handles and element handles are separate and not interchangeable. Note that `take_screenshot` currently returns a blank image for the main app window (custom GL/MPV rendering), so verify through the element tree and properties rather than screenshots.
 
+#### `slint-mcp.py` helper
+Prefer `./slint-mcp.py` (standard-library Python, in the project root) over hand-written `curl`. It looks up the window and root handles itself, picks elements by selector, and can wait for them, so one command replaces several JSON-RPC round trips. Elements are picked with `--id` (exact element ID), `--type` (type name or base) and `--label` (case-insensitive substring of the accessible label), then `--nth` to choose among matches. `--wait SECONDS` keeps polling until a match appears.
+
+```sh
+./slint-mcp.py click --type RailItem --label Twitch --wait 30     # nav items have no ID when the window is narrow
+./slint-mcp.py type --id SearchBar::search-field "shroud" --enter
+./slint-mcp.py wait --id TwitchResultRow::touch --wait 20         # prints each match on its own line
+./slint-mcp.py find --id VideoPlayer::seek-bar                    # handle, label, value, position, size
+./slint-mcp.py texts --contains bookmark                          # visible Text elements
+./slint-mcp.py pointer 100 100                                    # the player hides its controls when the pointer is still
+./slint-mcp.py call get_element_tree '{"elementHandle":{"generation":"1","index":"1"},"maxElements":50}'
+```
+
+Commands can be chained with `&&`, because a missing element exits non-zero with a message. Set `SLINT_MCP_PORT` if the app isn't on 9315. Some things to know when driving the app:
+- `set_element_value` (and `type`) works on text fields, but not on the seek bar. Clicking the seek bar seeks to its middle.
+- The video player's controls (seek bar, quality, bookmark) only exist while they're shown. Move the pointer twice to bring them back before looking them up.
+- The player covers the nav bar, so close it through its breadcrumb (`click --type Crumb --nth 0`) before navigating.
+
 ### Create previews with mock data
 When adding or changing a UI component, also create (or update) a preview in `ui/previews/` named `<component>-preview.slint`. A preview is a standalone `Window` component that imports the component and renders it with hardcoded mock data covering its main states (empty, loading, error, long text, etc.), see `ui/previews/video-card-preview.slint` for the pattern. Previews must not depend on Rust callbacks or live YouTube data, so the component's behaviour can be confirmed in isolation through the Slint MCP server.
 

@@ -471,9 +471,11 @@ pub fn sorted(results: &[SearchResult], users: bool, sort: i32) -> Vec<SearchRes
 }
 
 /// Twitch only searches a creator's videos for signed-in owners, so a user's
-/// videos are filtered locally. Every word has to appear in the title or game.
+/// videos and the local bookmarks are filtered here. Every word has to appear
+/// in the title, channel or game.
 pub fn matches_filter(result: &SearchResult, filter: &str) -> bool {
-    let haystack = format!("{} {}", result.title, result.metadata).to_lowercase();
+    let haystack =
+        format!("{} {} {}", result.title, result.subtitle, result.metadata).to_lowercase();
     filter
         .to_lowercase()
         .split_whitespace()

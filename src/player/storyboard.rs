@@ -1,5 +1,6 @@
-//! YouTube's seek-preview sprite sheets, read from the same yt-dlp response as
-//! the stream catalogue. Sheet URLs are signed, so they stay in memory only.
+//! Seek-preview sprite sheets from YouTube and Twitch, read from the same
+//! yt-dlp response as the stream catalogue. YouTube's sheet URLs are signed,
+//! so they stay in memory only.
 use serde_json::Value;
 use slint::{Rgba8Pixel, SharedPixelBuffer};
 use std::{
@@ -10,7 +11,8 @@ use std::{
 use tokio::task::JoinHandle;
 
 const MAX_FRAME: u32 = 1280;
-const MAX_GRID: u32 = 32;
+/// Twitch's small level puts all 200 frames on one 5x40 sheet.
+const MAX_GRID: u32 = 64;
 const MAX_SHEET: u32 = 4096;
 const MAX_PAGES: usize = 20_000;
 /// A sheet takes hundreds of milliseconds to arrive, too slow to fetch on hover,
@@ -103,7 +105,16 @@ fn level(format: &Value, duration: f64) -> Option<Storyboard> {
                 .map(str::to_owned)
         })
         .collect::<Option<Vec<_>>>()?;
-    if pages.is_empty() || pages.len() > MAX_PAGES {
+    let host = |page: &String| {
+        reqwest::Url::parse(page)
+            .ok()?
+            .host_str()
+            .map(str::to_owned)
+    };
+    if pages.is_empty()
+        || pages.len() > MAX_PAGES
+        || pages.iter().any(|page| host(page) != host(&pages[0]))
+    {
         return None;
     }
     let capacity = pages.len() as u32 * columns * rows;
@@ -118,12 +129,18 @@ fn level(format: &Value, duration: f64) -> Option<Storyboard> {
     })
 }
 
-fn allowed(url: &str) -> bool {
+/// YouTube serves sheets from its image hosts. Twitch keeps them next to the
+/// VOD on one of several CloudFront hosts, so those must be storyboard images.
+pub(crate) fn allowed(url: &str) -> bool {
     reqwest::Url::parse(url).is_ok_and(|url| {
-        url.scheme() == "https"
-            && url
-                .host_str()
-                .is_some_and(|h| h == "i.ytimg.com" || h.ends_with(".ytimg.com"))
+        let Some(host) = url.host_str().filter(|_| url.scheme() == "https") else {
+            return false;
+        };
+        host == "i.ytimg.com"
+            || host.ends_with(".ytimg.com")
+            || (host.ends_with(".cloudfront.net")
+                && url.path().contains("/storyboards/")
+                && url.path().ends_with(".jpg"))
     })
 }
 
@@ -561,6 +578,45 @@ mod tests {
         let levels = parse(&info(vec![bad, sb("sb1", 160, 90, 5, 5, 11)]));
         assert_eq!(levels.len(), 1);
         assert_eq!(levels[0].frame_width, 160);
+    }
+
+    /// Shaped like yt-dlp's Twitch levels: four sheets of 5x10, or one of 5x40.
+    fn twitch(id: &str, width: u32, height: u32, rows: u32, pages: usize) -> Value {
+        let fragments: Vec<_> = (0..pages)
+            .map(|page| json!({"url": format!("https://d2nvs31859zcd8.cloudfront.net/a_b_1_2/storyboards/9-{id}-{page}.jpg")}))
+            .collect();
+        json!({"format_id": id, "vcodec": "none", "width": width, "height": height,
+            "columns": 5, "rows": rows, "fps": 200. / 2750., "fragments": fragments})
+    }
+
+    #[test]
+    fn reads_twitch_levels() {
+        let levels = parse(&info(vec![
+            twitch("sb1", 110, 62, 40, 1),
+            twitch("sb0", 220, 124, 10, 4),
+        ]));
+        let sizes: Vec<_> = levels.iter().map(|l| (l.frame_width, l.frames)).collect();
+        assert_eq!(sizes, [(220, 200), (110, 200)]);
+        let last = levels[1].locate(2749.).unwrap();
+        assert_eq!((last.page, last.x, last.y), (0, 440, 39 * 62));
+    }
+
+    #[test]
+    fn rejects_other_cloudfront_images_and_mixed_hosts() {
+        assert!(!allowed(
+            "https://d2nvs31859zcd8.cloudfront.net/a/chunked/1.ts"
+        ));
+        assert!(!allowed(
+            "https://d2nvs31859zcd8.cloudfront.net/storyboards/1.png"
+        ));
+        assert!(!allowed(
+            "http://d2nvs31859zcd8.cloudfront.net/storyboards/1.jpg"
+        ));
+        assert!(!allowed("https://cloudfront.net.example/storyboards/1.jpg"));
+        let mut mixed = twitch("sb0", 220, 124, 10, 2);
+        mixed["fragments"][1]["url"] =
+            json!("https://d1m7jfoe9zdc1j.cloudfront.net/a_b_1_2/storyboards/9-sb0-1.jpg");
+        assert!(parse(&info(vec![mixed])).is_empty());
     }
 
     #[test]

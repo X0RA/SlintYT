@@ -58,7 +58,7 @@ pub(super) enum Update {
     Position(f64),
     Seeked(f64),
     Speed(f64),
-    Quality(String),
+    Quality(StreamQuality),
     Duration(f64),
     Volume(f64),
     Buffering(bool),
@@ -168,7 +168,9 @@ pub(super) fn publish(
                 super::media_keys::seeked(v);
             }
             Update::Speed(v) if v.is_finite() && v > 0. => state.set_player_speed(v as f32),
-            Update::Quality(label) => state.set_player_current_quality(label.into()),
+            Update::Quality(quality) => {
+                state.set_player_current_quality(quality.label(state.get_player_twitch()).into())
+            }
             Update::Duration(v) if v.is_finite() => state.set_player_duration(v.max(0.) as f32),
             Update::Volume(v) if v.is_finite() => state.set_player_volume(v as f32),
             Update::Buffering(v) => state.set_player_buffering(v),
@@ -242,35 +244,66 @@ fn observer(engine: &Mpv) -> libmpv2::Result<Mpv> {
         (8, "video-params/w", Format::Int64),
         (9, "video-params/h", Format::Int64),
         (10, "video-format", Format::String),
+        (11, "container-fps", Format::Double),
     ] {
         client.observe_property(name, format, index)?;
     }
     Ok(client)
 }
 
-fn quality_label(width: i64, height: i64, codec: &str) -> String {
-    if width <= 0 || height <= 0 {
-        return String::new();
+/// What mpv is decoding, for the chip next to the quality menu.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct StreamQuality {
+    pub resolution: i64,
+    pub fps: f64,
+    pub codec: String,
+}
+
+impl StreamQuality {
+    /// YouTube reads "720p · AV1". Every Twitch stream is H.264, so Twitch
+    /// reads like its own quality names instead, such as "720p60".
+    pub fn label(&self, twitch: bool) -> String {
+        if self.resolution <= 0 {
+            return String::new();
+        }
+        let resolution = self.resolution;
+        if twitch {
+            return match self.fps.round() {
+                fps if fps >= 50. => format!("{resolution}p{fps}"),
+                _ => format!("{resolution}p"),
+            };
+        }
+        match crate::playback_settings::codec_name(&self.codec) {
+            Some(codec) => format!("{resolution}p · {codec}"),
+            None => format!("{resolution}p"),
+        }
     }
-    // Match the settings' resolution convention for portrait videos.
-    let resolution = width.min(height);
-    match crate::playback_settings::codec_name(codec) {
-        Some(codec) => format!("{resolution}p · {codec}"),
-        None => format!("{resolution}p"),
+}
+
+fn stream_quality(width: i64, height: i64, fps: f64, codec: &str) -> StreamQuality {
+    if width <= 0 || height <= 0 {
+        return StreamQuality::default();
+    }
+    StreamQuality {
+        // Match the settings' resolution convention for portrait videos.
+        resolution: width.min(height),
+        fps: if fps.is_finite() { fps } else { 0. },
+        codec: codec.into(),
     }
 }
 
 fn current_quality(engine: &Mpv) -> Option<Update> {
-    let label = quality_label(
+    let quality = stream_quality(
         engine.get_property::<i64>("video-params/w").unwrap_or(0),
         engine.get_property::<i64>("video-params/h").unwrap_or(0),
+        engine.get_property::<f64>("container-fps").unwrap_or(0.),
         &engine
             .get_property::<String>("video-format")
             .unwrap_or_default(),
     );
     // Preserve the last known quality at EOF, when video properties disappear.
     // A new load explicitly clears it before its property observer is created.
-    (!label.is_empty()).then_some(Update::Quality(label))
+    (quality.resolution > 0).then_some(Update::Quality(quality))
 }
 
 fn sample_progress(engine: &Mpv, tracker: &mut Option<super::progress::Tracker>) {
@@ -577,9 +610,11 @@ pub fn start(
                                 Some(Update::Buffering(v))
                             }
                             ("eof-reached", PropertyData::Flag(v)) => Some(Update::Ended(v)),
-                            ("video-params/w" | "video-params/h" | "video-format", _) => {
-                                current_quality(&engine)
-                            }
+                            (
+                                "video-params/w" | "video-params/h" | "video-format"
+                                | "container-fps",
+                                _,
+                            ) => current_quality(&engine),
                             _ => None,
                         },
                         Ok(Event::EndFile(reason)) if reason == mpv_end_file_reason::Eof => {
@@ -644,12 +679,23 @@ mod tests {
 
     #[test]
     fn quality_labels_describe_the_decoded_stream_in_either_orientation() {
-        assert_eq!(quality_label(1280, 720, "av1"), "720p · AV1");
-        assert_eq!(quality_label(720, 1280, "av1"), "720p · AV1");
-        assert_eq!(quality_label(1280, 720, "vp9"), "720p · VP9");
-        assert_eq!(quality_label(854, 480, "h264"), "480p · H.264");
-        assert_eq!(quality_label(1920, 1080, ""), "1080p");
-        assert_eq!(quality_label(0, 0, "av1"), "");
+        let label = |w, h, codec| stream_quality(w, h, 30., codec).label(false);
+        assert_eq!(label(1280, 720, "av1"), "720p · AV1");
+        assert_eq!(label(720, 1280, "av1"), "720p · AV1");
+        assert_eq!(label(1280, 720, "vp9"), "720p · VP9");
+        assert_eq!(label(854, 480, "h264"), "480p · H.264");
+        assert_eq!(label(1920, 1080, ""), "1080p");
+        assert_eq!(label(0, 0, "av1"), "");
+    }
+
+    #[test]
+    fn twitch_quality_labels_match_twitch_names() {
+        let label = |h, fps| stream_quality(h * 16 / 9, h, fps, "h264").label(true);
+        assert_eq!(label(720, 60.), "720p60");
+        assert_eq!(label(1080, 59.94), "1080p60");
+        assert_eq!(label(480, 30.004), "480p");
+        assert_eq!(label(720, f64::NAN), "720p");
+        assert_eq!(label(0, 60.), "");
     }
     #[test]
     fn playback_failure_preserves_the_mpv_error_category() {

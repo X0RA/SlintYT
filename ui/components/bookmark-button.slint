@@ -8,11 +8,14 @@ export component BookmarkButton inherits Rectangle {
     callback toggled();
     toggled => { AppState.toggle-bookmark(root.video-id); }
     in property <bool> show-label: false;
+    // Twitch bookmarks are local, so they work without YouTube bookmarks.
+    in property <bool> available: AppState.bookmarks-enabled;
+    in property <string> collection: "your bookmark playlist";
     in property <int> membership: AppState.bookmark-state(root.video-id, AppState.bookmark-epoch);
     private property <bool> pending: root.membership >= 3;
     private property <bool> saved: root.membership == 2 || root.membership == 4;
     private property <bool> shown: root.reveal || touch.has-hover || keys.has-focus || root.pending;
-    private property <bool> usable: AppState.bookmarks-enabled && root.video-id != "" && root.membership > 0 && !root.pending;
+    private property <bool> usable: root.available && root.video-id != "" && root.membership > 0 && !root.pending;
     width: root.show-label ? content.preferred-width : 36px; height: root.show-label ? 40px : 36px;
     horizontal-stretch: 0;
     border-radius: self.height / 2;
@@ -20,7 +23,7 @@ export component BookmarkButton inherits Rectangle {
     border-width: keys.has-focus ? 1px : 0px; border-color: Theme.accent;
     accessible-role: button;
     accessible-label: root.pending ? "Updating bookmark" : root.saved ? "Remove bookmark" : "Bookmark video";
-    accessible-description: root.saved ? "Remove this video from your bookmark playlist" : "Add this video to your bookmark playlist";
+    accessible-description: root.saved ? "Remove this video from " + root.collection : "Add this video to " + root.collection;
     accessible-enabled: root.usable;
     accessible-action-default => { if root.usable { keys.focus(); root.toggled(); } }
     forward-focus: keys;
@@ -38,5 +41,5 @@ export component BookmarkButton inherits Rectangle {
         background: #25252df5; border-radius: 6px;
         tip := Text { text: root.pending ? "Updating bookmark…" : root.membership == 0 ? "Syncing bookmarks…" : root.saved ? "Remove bookmark" : "Bookmark video"; color: Theme.text; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
     }
-    keys := FocusScope { focus-on-click: false; enabled: AppState.bookmarks-enabled; key-pressed(event) => { if root.usable && (event.text == "\n" || event.text == " ") { root.toggled(); return accept; } return reject; } }
+    keys := FocusScope { focus-on-click: false; enabled: root.available; key-pressed(event) => { if root.usable && (event.text == "\n" || event.text == " ") { root.toggled(); return accept; } return reject; } }
 }

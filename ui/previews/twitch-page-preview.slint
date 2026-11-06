@@ -18,6 +18,11 @@ export component AppWindow inherits Window {
                 { title: "Any% world record attempts", subtitle: "GamesDoneQuick", metadata: "Celeste · 12.5K views · 2026-11-04", duration: "1:50:31" },
                 { title: "A very long video title that should elide because it does not fit inside the available width of this row at all", subtitle: "Runner", metadata: "1 view · 2026-01-02", duration: "12:04" },
             ]; } }
+            Button { text: "Bookmarks"; clicked => { root.clear(); AppState.twitch-search-text = ""; AppState.twitch-search-mode = 2; AppState.twitch-bookmarks = [
+                { id: "2", title: "Half watched and bookmarked", subtitle: "Runner", metadata: "Celeste · 980 views · 2026-11-01", duration: "5:49:48" },
+                { id: "4", title: "Another saved broadcast", subtitle: "GamesDoneQuick", metadata: "Just Chatting · 12K views · 2026-10-02", duration: "8:12:00" },
+            ]; } }
+            Button { text: "No bookmarks"; clicked => { root.clear(); AppState.twitch-search-text = ""; AppState.twitch-search-mode = 2; AppState.twitch-bookmarks = []; } }
             Button { text: "Users"; clicked => { root.clear(); AppState.twitch-results-mode = 1; AppState.twitch-search-mode = 1; AppState.twitch-results = [
                 { title: "GamesDoneQuick", subtitle: "@gamesdonequick · 2.1M followers", metadata: "Replay of the marathon", initials: "GD", tone: #3b4a63 },
                 { title: "quietstreamer", subtitle: "@quietstreamer · 1 follower", initials: "QS", tone: #4a3a3a },

@@ -3,10 +3,14 @@ use crate::{
     TwitchResult,
     twitch::{self as api, Client, SearchMode, SearchResult, VideoKind},
 };
-use std::cell::RefCell;
+use std::{cell::RefCell, rc::Rc};
 
 /// How many pages one filter may walk through before it stops and says so.
 const FILTER_PAGES: u32 = 20;
+/// How often a playing Twitch video's position is written down.
+const PROGRESS_INTERVAL: Duration = Duration::from_secs(5);
+/// The search radio's third choice lists bookmarks instead of searching.
+const BOOKMARKS_MODE: i32 = 2;
 
 /// Everything loaded so far. The UI models hold the sorted or filtered view of it.
 #[derive(Default)]
@@ -69,7 +73,10 @@ pub(super) fn wire(app: &AppWindow, runtime: tokio::runtime::Handle) {
         };
         let ui = app.global::<AppState>();
         let query = query.trim().to_owned();
-        if query.is_empty() || !ui.get_twitch_enabled() {
+        if query.is_empty()
+            || !ui.get_twitch_enabled()
+            || ui.get_twitch_search_mode() == BOOKMARKS_MODE
+        {
             return;
         }
         LISTS.with_borrow_mut(|lists| lists.search.clear());
@@ -95,7 +102,12 @@ pub(super) fn wire(app: &AppWindow, runtime: tokio::runtime::Handle) {
     let weak = app.as_weak();
     ui.on_twitch_sort_changed(move || {
         if let Some(app) = weak.upgrade() {
-            show_search(&app.global::<AppState>());
+            let ui = app.global::<AppState>();
+            if ui.get_twitch_search_mode() == BOOKMARKS_MODE {
+                show_bookmarks(&ui);
+            } else {
+                show_search(&ui);
+            }
         }
     });
     let weak = app.as_weak();
@@ -104,6 +116,8 @@ pub(super) fn wire(app: &AppWindow, runtime: tokio::runtime::Handle) {
             return;
         };
         let ui = app.global::<AppState>();
+        // Kept so its progress has somewhere to go, and resume knows it.
+        remember(&id, &title, &channel);
         ui.invoke_play_video(format!("twitch:{id}").into(), title);
         ui.set_player_channel(channel);
         crate::player::media_keys::refresh(&app);
@@ -153,6 +167,135 @@ pub(super) fn wire(app: &AppWindow, runtime: tokio::runtime::Handle) {
             show_user(&app.global::<AppState>());
         }
     });
+    wire_library(app);
+}
+
+/// Local bookmarks and watch progress, kept in `twitch_library`.
+fn wire_library(app: &AppWindow) {
+    let ui = app.global::<AppState>();
+    ui.on_twitch_bookmarked(|id, _| crate::twitch_library::shared().bookmarked(&id));
+    ui.on_twitch_progress(|id, _| crate::twitch_library::shared().progress(&id));
+    let weak = app.as_weak();
+    ui.on_twitch_toggle_bookmark(move |id| {
+        let Some(app) = weak.upgrade() else {
+            return;
+        };
+        let ui = app.global::<AppState>();
+        let error = {
+            let mut library = crate::twitch_library::shared();
+            if !library.known(&id)
+                && let Some(video) = loaded(&id)
+            {
+                library.remember(video);
+            }
+            let now = crate::history::now();
+            if library.toggle_bookmark(&id, now).is_none() {
+                return;
+            }
+            let result = library.save();
+            if result.is_err() {
+                library.toggle_bookmark(&id, now);
+            }
+            result.err()
+        };
+        if let Some(error) = error {
+            ui.set_toast(format!("{error:#}").into());
+        }
+        ui.set_twitch_library_epoch(ui.get_twitch_library_epoch() + 1);
+        if ui.get_twitch_search_mode() == BOOKMARKS_MODE {
+            show_bookmarks(&ui);
+        }
+    });
+    let weak = app.as_weak();
+    ui.on_twitch_bookmarks_changed(move || {
+        if let Some(app) = weak.upgrade() {
+            show_bookmarks(&app.global::<AppState>());
+        }
+    });
+    // The player has no hook for Twitch, so its position is read on a timer.
+    let timer = Rc::new(slint::Timer::default());
+    let keep_alive = timer.clone();
+    let weak = app.as_weak();
+    timer.start(slint::TimerMode::Repeated, PROGRESS_INTERVAL, move || {
+        let Some(app) = weak.upgrade() else {
+            keep_alive.stop();
+            return;
+        };
+        let ui = app.global::<AppState>();
+        // Before a video loads its position is still 0, which would undo progress.
+        if !ui.get_player_open()
+            || !ui.get_player_twitch()
+            || ui.get_player_loading()
+            || !ui.get_player_error().is_empty()
+        {
+            return;
+        }
+        let length = f64::from(ui.get_player_duration());
+        let position = if ui.get_player_ended() {
+            length
+        } else {
+            f64::from(ui.get_player_position())
+        };
+        let id = ui.get_player_video_id();
+        let mut library = crate::twitch_library::shared();
+        if library.record(&id, position, length, crate::history::now()) {
+            // A failed write is retried on the next tick.
+            let _ = library.save();
+            drop(library);
+            ui.set_twitch_library_epoch(ui.get_twitch_library_epoch() + 1);
+        }
+    });
+}
+
+/// A loaded search or user page row, which has the details a bookmark shows.
+fn loaded(id: &str) -> Option<SearchResult> {
+    LISTS.with_borrow(|lists| {
+        lists
+            .search
+            .iter()
+            .chain(&lists.user)
+            .find(|result| result.id == id)
+            .cloned()
+    })
+}
+
+fn remember(id: &str, title: &str, channel: &str) {
+    let mut library = crate::twitch_library::shared();
+    let video = loaded(id).or_else(|| {
+        (!library.known(id)).then(|| SearchResult {
+            id: id.into(),
+            title: title.into(),
+            ..SearchResult::default()
+        })
+    });
+    if let Some(mut video) = video {
+        if video.subtitle.is_empty() {
+            video.subtitle = channel.into();
+        }
+        library.remember(video);
+    }
+}
+
+/// Bookmarks are local, so the search text filters them as it's typed.
+fn show_bookmarks(ui: &AppState) {
+    let filter = ui.get_twitch_search_text().to_string();
+    let mut entries: Vec<_> = crate::twitch_library::shared()
+        .bookmarks()
+        .into_iter()
+        .filter(|entry| api::matches_filter(&entry.video, &filter))
+        .collect();
+    match ui.get_twitch_sort() {
+        1 => entries.sort_by_key(|e| std::cmp::Reverse((e.watched_at, e.bookmarked_at))),
+        2 => entries.sort_by_cached_key(|e| {
+            (
+                e.video.subtitle.to_lowercase(),
+                std::cmp::Reverse(e.bookmarked_at),
+            )
+        }),
+        _ => entries.sort_by_key(|e| std::cmp::Reverse(e.bookmarked_at)),
+    }
+    let rows: Vec<_> = entries.into_iter().map(|e| row(e.video)).collect();
+    ui.set_twitch_bookmarks(ModelRc::new(VecModel::from(rows)));
 }
 
 fn prepare_operations(runtime: &tokio::runtime::Handle, client: &Option<Arc<Client>>) {

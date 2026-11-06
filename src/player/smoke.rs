@@ -481,7 +481,7 @@ fn native_video_playback_controls_resize_and_close() {
                     assert!(!state.get_player_open());
                     player.set_cookies(Arc::from("# Netscape HTTP Cookie File\n"));
                     state.invoke_play_video("invalid".into(), "Invalid video".into());
-                    assert!(state.get_player_error().contains("invalid YouTube ID"));
+                    assert!(state.get_player_error().contains("invalid ID"));
                     state.invoke_player_close();
                     let old_epoch = player.epoch.load(Ordering::Acquire);
                     // Queue old file events, then start a new session before
@@ -490,7 +490,11 @@ fn native_video_playback_controls_resize_and_close() {
                         commands::Update::Error(libmpv2::Error::Raw(-13), None),
                         commands::Update::Ended(true),
                         commands::Update::Position(999.),
-                        commands::Update::Quality("9999p · AV1".into()),
+                        commands::Update::Quality(commands::StreamQuality {
+                            resolution: 9999,
+                            fps: 30.,
+                            codec: "av1".into(),
+                        }),
                     ] {
                         commands::publish(&app.as_weak(), player.epoch.clone(), old_epoch, update);
                     }

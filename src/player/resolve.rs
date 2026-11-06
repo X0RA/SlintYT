@@ -155,12 +155,11 @@ async fn catalogue_with(
                 &StreamSelection::default(),
             )
             .await?;
-            let catalogue = super::quality::parse(&output)?;
-            Ok::<_, anyhow::Error>(if twitch_id(id).is_some() {
-                catalogue.for_twitch()
+            if twitch_id(id).is_some() {
+                super::quality::parse_twitch(&output)
             } else {
-                catalogue
-            })
+                super::quality::parse(&output)
+            }
         };
         match attempt(
             if signed_in { cookies } else { "" },
@@ -186,7 +185,7 @@ async fn resolve_with(
     mode: Mode,
 ) -> Result<Lookup> {
     if !playable_id(id) {
-        bail!("This video has an invalid YouTube ID.");
+        bail!("This video has an invalid ID.");
     }
     let signed_in =
         twitch_id(id).is_none() && mode != Mode::Public && !session_config(cookies)?.is_empty();
@@ -291,11 +290,13 @@ async fn run(
     let output = extract(executable, id, cookies, check, timeout, selection).await?;
     let mut media = parse_media(&output)?;
     // A malformed catalogue must not prevent an otherwise playable video.
-    let mut catalogue = super::quality::parse(&output).map_err(|error| error.to_string());
-    if twitch_id(id).is_some() {
+    let catalogue = if twitch_id(id).is_some() {
         media.referer = TWITCH_REFERER.into();
-        catalogue = catalogue.map(super::quality::Catalogue::for_twitch);
+        super::quality::parse_twitch(&output)
+    } else {
+        super::quality::parse(&output)
     }
+    .map_err(|error| error.to_string());
     Ok(Lookup { media, catalogue })
 }
 
@@ -317,7 +318,7 @@ async fn extract(
             format!("https://www.youtube.com/watch?v={id}"),
             session_config(cookies)?,
         ),
-        None => bail!("This video has an invalid YouTube ID."),
+        None => bail!("This video has an invalid ID."),
     };
     let mut command = Command::new(executable);
     #[cfg(target_os = "macos")]

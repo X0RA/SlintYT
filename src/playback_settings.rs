@@ -41,10 +41,22 @@ pub const PREVIEW_QUALITIES: [PreviewQuality; 4] = [
     PreviewQuality::Lowest,
 ];
 
+/// Which of Twitch's two seek-preview levels to load. Both have 200 frames,
+/// but Low arrives as a single sheet, so the whole timeline loads at once.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TwitchPreviewQuality {
+    #[default]
+    Low,
+    High,
+}
+pub const TWITCH_PREVIEW_QUALITIES: [TwitchPreviewQuality; 2] =
+    [TwitchPreviewQuality::Low, TwitchPreviewQuality::High];
+
 #[derive(Clone)]
 pub struct StreamSelection {
     pub format: String,
     pub sort: String,
+    pub max_height: Option<u16>,
 }
 
 impl Default for StreamSelection {
@@ -52,6 +64,7 @@ impl Default for StreamSelection {
         Self {
             format: "bestvideo+bestaudio/best".into(),
             sort: String::new(),
+            max_height: None,
         }
     }
 }
@@ -74,6 +87,7 @@ pub struct Preferences {
     pub prefetch: bool,
     pub previews: bool,
     pub preview_quality: PreviewQuality,
+    pub twitch_preview_quality: TwitchPreviewQuality,
 }
 
 impl Default for Preferences {
@@ -88,6 +102,7 @@ impl Default for Preferences {
             prefetch: false,
             previews: true,
             preview_quality: PreviewQuality::High,
+            twitch_preview_quality: TwitchPreviewQuality::Low,
         }
     }
 }
@@ -106,13 +121,26 @@ impl Preferences {
     /// A portrait rendition fits by width; a landscape rendition fits by height.
     /// If none fit, res:N chooses the smallest available resolution above N.
     pub fn selection(&self) -> StreamSelection {
-        let (filter, codec) = match self.codec {
+        let codec = match self.codec {
             Codec::Vp9 => ("[vcodec~='^vp0?9']", "vcodec:vp9.2"),
             Codec::Av1 => ("[vcodec~='^av0?1']", "vcodec:av01"),
             Codec::H264 => ("[vcodec~='^(avc|h264)']", "vcodec:h264"),
         };
+        self.select(Some(codec))
+    }
+
+    /// Twitch only serves H.264, so a codec preference would only mislead.
+    pub fn twitch_selection(&self) -> StreamSelection {
+        self.select(None)
+    }
+
+    fn select(&self, codec: Option<(&str, &str)>) -> StreamSelection {
         let mut choices = Vec::new();
-        for codec_filter in [filter, ""] {
+        let filters = match codec {
+            Some((filter, _)) => vec![filter, ""],
+            None => vec![""],
+        };
+        for codec_filter in filters {
             if let Some(h) = self.max_height {
                 for (dimension, aspect) in [("height", ">=?1"), ("width", "<?1")] {
                     let eligible =
@@ -126,11 +154,16 @@ impl Preferences {
             }
         }
         choices.push("bestvideo+bestaudio/best".into());
+        let resolution = match self.max_height {
+            Some(h) => format!("res:{h}"),
+            None => "res".into(),
+        };
         StreamSelection {
+            max_height: self.max_height,
             format: choices.join("/"),
-            sort: match self.max_height {
-                Some(h) => format!("res:{h},{codec}"),
-                None => format!("res,{codec}"),
+            sort: match codec {
+                Some((_, codec)) => format!("{resolution},{codec}"),
+                None => resolution,
             },
         }
     }
@@ -170,6 +203,12 @@ impl Preferences {
         state.set_playback_prefetch(self.prefetch);
         state.set_playback_previews(self.previews);
         state.set_playback_preview_quality(self.preview_rank() as i32);
+        state.set_playback_twitch_preview_quality(
+            TWITCH_PREVIEW_QUALITIES
+                .iter()
+                .position(|v| v == &self.twitch_preview_quality)
+                .unwrap_or(0) as i32,
+        );
     }
 
     /// Position among the storyboard levels, which are also sharpest first.
@@ -178,6 +217,14 @@ impl Preferences {
             .iter()
             .position(|v| v == &self.preview_quality)
             .unwrap_or(0)
+    }
+
+    /// Twitch's levels are sharpest first too: High, then Low.
+    pub fn twitch_preview_rank(&self) -> usize {
+        match self.twitch_preview_quality {
+            TwitchPreviewQuality::High => 0,
+            TwitchPreviewQuality::Low => 1,
+        }
     }
 
     fn change(&mut self, setting: i32, value: i32) -> Option<()> {
@@ -192,6 +239,7 @@ impl Preferences {
             6 if index <= 1 => self.prefetch = index == 1,
             7 if index <= 1 => self.previews = index == 1,
             8 => self.preview_quality = *PREVIEW_QUALITIES.get(index)?,
+            9 => self.twitch_preview_quality = *TWITCH_PREVIEW_QUALITIES.get(index)?,
             _ => return None,
         }
         Some(())
@@ -249,7 +297,7 @@ pub fn wire(app: &AppWindow) -> Arc<RwLock<Preferences>> {
                     if setting == 6 {
                         state.invoke_playback_prefetch_changed();
                     }
-                    if setting == 7 || setting == 8 {
+                    if (7..=9).contains(&setting) {
                         state.invoke_playback_previews_changed();
                     }
                 }
@@ -281,6 +329,11 @@ mod tests {
         assert_eq!(next.preview_quality, PreviewQuality::Lowest);
         assert_eq!(next.preview_rank(), 3);
         assert!(next.change(8, 4).is_none());
+        assert_eq!(next.twitch_preview_quality, TwitchPreviewQuality::Low);
+        assert_eq!(next.twitch_preview_rank(), 1);
+        assert!(next.change(9, 1).is_some());
+        assert_eq!(next.twitch_preview_rank(), 0);
+        assert!(next.change(9, 2).is_none());
         let round_trip: Preferences =
             serde_json::from_str(&serde_json::to_string(&next).unwrap()).unwrap();
         assert_eq!(round_trip, next);

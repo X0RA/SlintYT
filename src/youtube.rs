@@ -23,6 +23,7 @@ use crate::{
 mod pages;
 pub(crate) mod recovery;
 pub(crate) mod renderers;
+pub(crate) mod subscriptions;
 pub use pages::{ChannelInfo, avatar_url, item as video_item, number};
 
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]

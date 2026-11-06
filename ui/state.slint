@@ -7,7 +7,7 @@ export struct VideoData {
     duration: string, thumbnail: image, playlist: bool, watched: int, watch-progress: int,
     channel-id: string, initials: string, tone: color, avatar: string, group: string, set-id: string, subscribed: bool,
 }
-export struct FeedSection { label: string, detail: string, start: int, count: int }
+export struct FeedSection { label: string, detail: string, start: int, count: int, header-index: int, collapsed: bool }
 export struct CommentData { id: string, author: string, author-id: string, initials: string, avatar: string, text: string, metadata: string, likes: string, replies: int, token: string, indent: int, expanded: bool, liked: bool, can-like: bool }
 export struct Breadcrumb { id: string, title: string, position: float, playlist-index: int }
 export struct LinkData { title: string, url: string }

@@ -1,4 +1,6 @@
 // Resize to compare integer card geometry at adjacent widths.
+// Subscriptions: hover the bare chevron after each heading, then toggle it.
+// Collapsed Today shows the right-facing chevron without a selected background or ring.
 import { Button, Palette } from "std-widgets.slint";
 import { VideoFeed } from "../views/video-feed.slint";
 import { AppState } from "../state.slint";
@@ -32,6 +34,21 @@ export component AppWindow inherits Window {
             Button { text: "Error"; clicked => { AppState.error = "YouTube could not be reached. Check your connection and retry."; AppState.busy = false; } }
         }
         HorizontalLayout {
+            Button { text: "Subscriptions"; clicked => {
+                AppState.view-kind = 5; AppState.page-title = "Subscriptions";
+                AppState.videos = [
+                    {id:"live",title:"Live from the studio",metadata:"1.3K watching",duration:"LIVE",group:"Live now"},
+                    {id:"today",title:"A very long upload title to check how date headings sit above wrapped cards",metadata:"12K views · 2 hours ago",group:"Today"},
+                    {id:"today-second",title:"Another row in Today that collapses with the same heading",metadata:"4 hours ago",group:"Today"},
+                    {id:"yesterday",title:"Yesterday's upload",metadata:"3K views · 1 day ago",group:"Yesterday"},
+                    {id:"two-days",title:"A recent upload",metadata:"2 days ago",group:"2 days ago"},
+                    {id:"week",title:"An older upload",metadata:"1 week ago",group:"1 week ago"},
+                    {id:"unknown",title:"An upload without a publication date",metadata:"50 views",group:"Date unavailable"}
+                ];
+                AppState.sections = [{start:0,count:1,label:"Live now",header-index:0},{start:1,count:1,label:"Today",header-index:1},{start:2,count:1,header-index:1},{start:3,count:1,label:"Yesterday",header-index:3},{start:4,count:1,label:"2 days ago",header-index:4},{start:5,count:1,label:"1 week ago",header-index:5},{start:6,count:1,label:"Date unavailable",header-index:6}];
+                AppState.error = ""; AppState.busy = false;
+            } }
+            Button { text: "Collapsed Today"; clicked => { AppState.sections[1].collapsed = true; } }
             Button { text: "Bookmarks"; clicked => { AppState.view-kind = 9; AppState.page-title = "Bookmarks"; AppState.bookmarks-note = "Watch history is still syncing. Recently played order is incomplete."; } }
             Button { text: "Cached history"; clicked => { AppState.watch-note = "Using cached watch history · 1273 watched videos. Refreshing recent watches…"; AppState.videos[0].watched = 1; AppState.videos[1].watched = 0; } }
             Button { text: "Reconcile history"; clicked => { AppState.watch-note = "Checking for watch history changes… 50 videos verified. Older cached statuses stay Unknown until checked."; AppState.videos[0].watched = 0; AppState.videos[1].watched = 0; } }

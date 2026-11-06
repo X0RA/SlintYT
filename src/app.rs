@@ -1416,7 +1416,7 @@ fn publish_feed(
     note: String,
 ) {
     let (busy, refreshing) = activity;
-    let display: Vec<_> = feed
+    let mut display: Vec<_> = feed
         .videos
         .iter()
         .map(|video| (video.clone(), images.get(&video.thumbnail)))
@@ -1443,6 +1443,13 @@ fn publish_feed(
             return;
         }
         let state = app.global::<AppState>();
+        if state.get_view_kind() == 5 {
+            // Regroup the entire loaded feed, including cached and continuation pages.
+            for (video, _) in &mut display {
+                video.group = youtube::subscriptions::group(video).1;
+            }
+            display.sort_by_cached_key(|(video, _)| youtube::subscriptions::group(video).0);
+        }
         let old: std::collections::HashMap<_, _> = state
             .get_videos()
             .iter()
@@ -1756,6 +1763,13 @@ pub(crate) fn reflow(app: &AppWindow, columns: i32) {
     let mut rows = Vec::new();
     let columns = columns.clamp(1, 6) as usize;
     let grouped = matches!(state.get_view_kind(), 1 | 5);
+    // Keep each subscription group's choice when resizing or loading another page.
+    let collapsed: std::collections::HashSet<_> = state
+        .get_sections()
+        .iter()
+        .filter(|section| state.get_view_kind() == 5 && section.collapsed)
+        .map(|section| section.label.to_string())
+        .collect();
     let mut index = 0;
     while index < model.row_count() {
         let group = model
@@ -1769,6 +1783,7 @@ pub(crate) fn reflow(app: &AppWindow, columns: i32) {
             end += 1;
         }
         let start = index;
+        let header_index = rows.len() as i32;
         let detail = match end - start {
             1 => "1 video".to_string(),
             n => format!("{n} videos"),
@@ -1789,6 +1804,8 @@ pub(crate) fn reflow(app: &AppWindow, columns: i32) {
                 },
                 start: index as i32,
                 count: count as i32,
+                header_index,
+                collapsed: first && collapsed.contains(&group),
             });
             index += count;
         }

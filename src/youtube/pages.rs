@@ -184,18 +184,8 @@ impl Session {
                     recovery::check_response(&raw)?;
                     let content = super::browse_primary(&raw["contents"], super::ParseMode::Feed)
                         .unwrap_or(&raw);
-                    let mut items = super::renderers::cards(content);
+                    let items = super::renderers::cards(content);
                     if !items.is_empty() {
-                        for item in &mut items {
-                            item.group = if item.metadata.contains("hour")
-                                || item.metadata.contains("minute")
-                                || (1..=6).any(|n| item.metadata.contains(&format!("{n} day")))
-                            {
-                                "This week".into()
-                            } else {
-                                "Earlier".into()
-                            };
-                        }
                         return Ok(Page {
                             videos: items,
                             continuation: super::find_renderer(content, "continuationItemRenderer")
@@ -219,18 +209,7 @@ impl Session {
                 .map_err(|e| {
                     recovery::request_error(e, "Could not load subscriptions. Please retry.")
                 })?;
-                let mut page = videos(result);
-                for v in &mut page.videos {
-                    v.group = if v.metadata.contains("hour")
-                        || v.metadata.contains("minute")
-                        || (1..=6).any(|n| v.metadata.contains(&format!("{n} day")))
-                    {
-                        "This week".into()
-                    } else {
-                        "Earlier".into()
-                    };
-                }
-                Ok(page)
+                Ok(videos(result))
             }
             View::Channels => {
                 let p: Paginator<ChannelItem> = if let Some(t) = token {

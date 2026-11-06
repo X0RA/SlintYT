@@ -32,6 +32,13 @@ fn main() {
                     "choice",
                     "back-link",
                     "scrubber",
+                    "twitch-page",
+                    "twitch-user-page",
+                    "twitch-landing",
+                    "twitch-channel-card",
+                    "twitch-video-card",
+                    "twitch-filter-bar",
+                    "twitch-recent-menu",
                     "seek-preview"
                 ]
                 .contains(&name.as_str()),

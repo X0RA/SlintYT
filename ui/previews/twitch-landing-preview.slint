@@ -1,0 +1,21 @@
+import { TwitchLanding } from "../components/twitch-landing.slint";
+import { AppState } from "../state.slint";
+import { Button } from "std-widgets.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData, TwitchResult, TwitchRecent, TwitchFollow } from "../state.slint";
+export component AppWindow inherits Window {
+    title: "Twitch landing preview"; preferred-width: 900px; height: 650px; background: #0e0e10;
+    function full() {
+        AppState.twitch-following-list = [{ login: "runner", name: "A channel with a very long display name", initials: "RU", status: "4 new videos", fresh: true }, { login: "other", name: "Other", initials: "OT", status: "Up to date" }];
+        AppState.twitch-following-total = 12;
+        AppState.twitch-bookmarks = [{ id: "42", title: "A very long broadcast title with world record attempts and more", channel: "GamesDoneQuick", stats: "12.5K views · 2 days ago", game: "Celeste", duration: "1:50:31", initials: "GD", tone: #4b3ab3 },{ id: "42", title: "A very long broadcast title with world record attempts and more", channel: "GamesDoneQuick", stats: "12.5K views · 2 days ago", game: "Celeste", duration: "1:50:31", initials: "GD", tone: #4b3ab3 },{ id: "42", title: "A very long broadcast title with world record attempts and more", channel: "GamesDoneQuick", stats: "12.5K views · 2 days ago", game: "Celeste", duration: "1:50:31", initials: "GD", tone: #4b3ab3 }];
+    }
+    init => { root.full(); }
+    VerticalLayout { padding: 20px;
+        TwitchLanding {}
+        Rectangle { vertical-stretch: 1; }
+        HorizontalLayout {
+            Button { text: "Full"; clicked => { root.full(); } }
+            Button { text: "Empty"; clicked => { AppState.twitch-following-list = []; AppState.twitch-following-total = 0; AppState.twitch-bookmarks = []; } }
+        }
+    }
+}

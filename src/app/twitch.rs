@@ -1,21 +1,23 @@
 use super::*;
 use crate::{
-    TwitchResult,
+    TwitchFollow, TwitchRecent, TwitchResult,
     twitch::{self as api, Client, SearchMode, SearchResult, VideoKind},
+    twitch_library::{self as library, Follow},
 };
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 /// How many pages one filter may walk through before it stops and says so.
 const FILTER_PAGES: u32 = 20;
 /// How often a playing Twitch video's position is written down.
 const PROGRESS_INTERVAL: Duration = Duration::from_secs(5);
-/// The search radio's third choice lists bookmarks instead of searching.
-const BOOKMARKS_MODE: i32 = 2;
+/// Followed channels shown before "See all".
+const FOLLOWING_PREVIEW: usize = 8;
 
 /// Everything loaded so far. The UI models hold the sorted or filtered view of it.
 #[derive(Default)]
 struct Lists {
     search: Vec<SearchResult>,
+    channels: Vec<SearchResult>,
     user: Vec<SearchResult>,
     user_cursor: Option<String>,
     filter_pages: u32,
@@ -23,6 +25,8 @@ struct Lists {
 
 thread_local! {
     static LISTS: RefCell<Lists> = RefCell::default();
+    /// Each followed channel's newest video IDs, once they have been checked.
+    static LATEST: RefCell<HashMap<String, Vec<u64>>> = RefCell::default();
 }
 
 /// What a request needs to run and to report back to the UI thread.
@@ -66,6 +70,12 @@ pub(super) fn wire(app: &AppWindow, runtime: tokio::runtime::Handle) {
         generation: Arc::new(AtomicU64::new(0)),
         ..search.clone()
     };
+    let channels = Task {
+        generation: Arc::new(AtomicU64::new(0)),
+        ..search.clone()
+    };
+    let landing = search.clone();
+    let channel_task = channels.clone();
     let task = search.clone();
     ui.on_twitch_search(move |query| {
         let Some(app) = task.weak.upgrade() else {
@@ -73,18 +83,31 @@ pub(super) fn wire(app: &AppWindow, runtime: tokio::runtime::Handle) {
         };
         let ui = app.global::<AppState>();
         let query = query.trim().to_owned();
-        if query.is_empty()
-            || !ui.get_twitch_enabled()
-            || ui.get_twitch_search_mode() == BOOKMARKS_MODE
-        {
+        if query.is_empty() || !ui.get_twitch_enabled() {
             return;
         }
-        LISTS.with_borrow_mut(|lists| lists.search.clear());
+        {
+            let mut library = library::shared();
+            library.add_search(&query, 0);
+            // Only the list of recent searches is lost if this fails.
+            let _ = library.save();
+        }
+        show_landing(&ui);
+        LISTS.with_borrow_mut(|lists| {
+            lists.search.clear();
+            lists.channels.clear();
+        });
         ui.set_twitch_results(ModelRc::default());
         ui.set_twitch_cursor("".into());
         ui.set_twitch_results_query(query.as_str().into());
-        ui.set_twitch_results_mode(ui.get_twitch_search_mode());
-        run_search(&ui, &task, query, None);
+        ui.set_twitch_channels(ModelRc::default());
+        ui.set_twitch_channel_cursor("".into());
+        ui.set_twitch_video_total(0);
+        ui.set_twitch_channel_total(0);
+        ui.set_twitch_results_tab(0);
+        ui.set_twitch_sort(0);
+        run_search(&ui, &task, query.clone(), None, false);
+        run_search(&ui, &channel_task, query, None, true);
     });
     let task = search;
     ui.on_twitch_load_more(move || {
@@ -97,17 +120,29 @@ pub(super) fn wire(app: &AppWindow, runtime: tokio::runtime::Handle) {
             return;
         }
         let query = ui.get_twitch_results_query().to_string();
-        run_search(&ui, &task, query, Some(cursor));
+        run_search(&ui, &task, query, Some(cursor), false);
+    });
+    let task = channels.clone();
+    ui.on_twitch_load_more_channels(move || {
+        if let Some(app) = task.weak.upgrade() {
+            let ui = app.global::<AppState>();
+            let cursor = ui.get_twitch_channel_cursor().to_string();
+            if !ui.get_twitch_channels_busy() && !cursor.is_empty() {
+                run_search(
+                    &ui,
+                    &task,
+                    ui.get_twitch_results_query().to_string(),
+                    Some(cursor),
+                    true,
+                );
+            }
+        }
     });
     let weak = app.as_weak();
     ui.on_twitch_sort_changed(move || {
         if let Some(app) = weak.upgrade() {
             let ui = app.global::<AppState>();
-            if ui.get_twitch_search_mode() == BOOKMARKS_MODE {
-                show_bookmarks(&ui);
-            } else {
-                show_search(&ui);
-            }
+            show_search(&ui);
         }
     });
     let weak = app.as_weak();
@@ -140,7 +175,13 @@ pub(super) fn wire(app: &AppWindow, runtime: tokio::runtime::Handle) {
         ui.set_twitch_user_tab(0);
         ui.set_twitch_user_sort(0);
         ui.set_twitch_user_filter("".into());
+        let following = library::shared().following(&login);
+        ui.set_twitch_user_following(following);
         reload_user(&ui, &task);
+        if following {
+            // Opening the channel counts its videos as seen.
+            refresh_follow(&task, login.clone(), true);
+        }
         load_user_info(&task, login);
     });
     let task = user.clone();
@@ -168,13 +209,230 @@ pub(super) fn wire(app: &AppWindow, runtime: tokio::runtime::Handle) {
         }
     });
     wire_library(app);
+    wire_landing(app, landing, channels);
+}
+
+/// Recent searches for the dropdown, and followed channels and bookmarks for the landing page.
+fn wire_landing(app: &AppWindow, task: Task, channels: Task) {
+    let ui = app.global::<AppState>();
+    show_landing(&ui);
+    let weak = app.as_weak();
+    ui.on_twitch_recent_refresh(move || {
+        if let Some(app) = weak.upgrade() {
+            show_landing(&app.global::<AppState>());
+        }
+    });
+    let refresh = task.clone();
+    ui.on_twitch_landing_refresh(move || {
+        let Some(app) = refresh.weak.upgrade() else {
+            return;
+        };
+        show_landing(&app.global::<AppState>());
+        refresh_bookmark_avatars(&refresh);
+        for follow in library::shared().follows() {
+            refresh_follow(&refresh, follow.login, false);
+        }
+    });
+    let weak = app.as_weak();
+    ui.on_twitch_recent_remove(move |query| {
+        if let Some(app) = weak.upgrade() {
+            {
+                let mut library = library::shared();
+                let indices: Vec<_> = library
+                    .searches()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, s)| s.query.eq_ignore_ascii_case(&query))
+                    .map(|(i, _)| i)
+                    .collect();
+                for i in indices.into_iter().rev() {
+                    library.remove_search(i);
+                }
+                let _ = library.save();
+            }
+            show_landing(&app.global::<AppState>());
+        }
+    });
+    let weak = app.as_weak();
+    ui.on_twitch_recent_clear(move || {
+        if let Some(app) = weak.upgrade() {
+            {
+                let mut library = library::shared();
+                library.clear_searches();
+                let _ = library.save();
+            }
+            show_landing(&app.global::<AppState>());
+        }
+    });
+    let clear = task.clone();
+    ui.on_twitch_clear_search(move || {
+        let Some(app) = clear.weak.upgrade() else {
+            return;
+        };
+        let ui = app.global::<AppState>();
+        // A search still running would otherwise fill the page back in.
+        clear.generation.fetch_add(1, Ordering::Relaxed);
+        channels.generation.fetch_add(1, Ordering::Relaxed);
+        LISTS.with_borrow_mut(|lists| lists.channels.clear());
+        ui.set_twitch_channels(ModelRc::default());
+        ui.set_twitch_channel_cursor("".into());
+        ui.set_twitch_channels_busy(false);
+        LISTS.with_borrow_mut(|lists| lists.search.clear());
+        ui.set_twitch_results(ModelRc::default());
+        ui.set_twitch_cursor("".into());
+        ui.set_twitch_results_query("".into());
+        ui.set_twitch_busy(false);
+        ui.set_twitch_error("".into());
+        ui.set_twitch_channels_error("".into());
+        ui.set_twitch_sort(0);
+        show_landing(&ui);
+    });
+    ui.on_twitch_toggle_follow(move |item| {
+        let Some(app) = task.weak.upgrade() else {
+            return;
+        };
+        let ui = app.global::<AppState>();
+        let follow = Follow {
+            login: item.id.into(),
+            name: item.title.into(),
+            picture: item.picture.into(),
+            ..Follow::default()
+        };
+        let login = follow.login.clone();
+        let now = crate::history::now();
+        let result = {
+            let mut library = library::shared();
+            let following = library.toggle_follow(follow.clone(), now);
+            let saved = library.save();
+            if saved.is_err() {
+                library.toggle_follow(follow, now);
+            }
+            saved.map(|()| following)
+        };
+        match result {
+            Ok(following) => {
+                if ui.get_twitch_user_login() == login {
+                    ui.set_twitch_user_following(following);
+                }
+                ui.set_twitch_library_epoch(ui.get_twitch_library_epoch() + 1);
+                if following {
+                    refresh_follow(&task, login, true);
+                }
+            }
+            Err(error) => ui.set_toast(format!("{error:#}").into()),
+        }
+        show_landing(&ui);
+    });
+}
+
+/// Fetches a followed channel's newest videos to count the new ones. With
+/// `seen`, or the first time, they all count as seen.
+fn refresh_follow(task: &Task, login: String, seen: bool) {
+    let Some(client) = task.client.clone() else {
+        return;
+    };
+    let weak = task.weak.clone();
+    task.runtime.spawn(async move {
+        let Ok(page) = client.latest_videos(&login).await else {
+            return;
+        };
+        let ids: Vec<u64> = page
+            .results
+            .iter()
+            .filter_map(|video| video.id.parse().ok())
+            .collect();
+        update(&weak, move |app| {
+            let ui = app.global::<AppState>();
+            // The channel may have been opened while this was loading.
+            let open = ui.get_twitch_user_open() && ui.get_twitch_user_login() == login;
+            if let Some(newest) = ids.iter().max().copied() {
+                let mut library = library::shared();
+                let first = library.follow(&login).is_some_and(|f| f.seen.is_none());
+                if (seen || open || first) && library.mark_seen(&login, newest) {
+                    let _ = library.save();
+                }
+            }
+            LATEST.with_borrow_mut(|latest| latest.insert(login, ids));
+            show_landing(&ui);
+        });
+    });
+}
+
+fn show_landing(ui: &AppState) {
+    let (recent, follows) = {
+        let library = library::shared();
+        let filter = ui.get_twitch_search_text().to_lowercase();
+        let mut seen = std::collections::HashSet::new();
+        let recent: Vec<_> = library
+            .searches()
+            .iter()
+            .filter(|s| {
+                s.query.to_lowercase().contains(&filter) && seen.insert(s.query.to_lowercase())
+            })
+            .map(|s| TwitchRecent {
+                query: s.query.as_str().into(),
+            })
+            .collect();
+        (recent, library.follows())
+    };
+    let mut follows: Vec<_> = LATEST.with_borrow(|latest| {
+        follows
+            .into_iter()
+            .map(|follow| {
+                let new = latest
+                    .get(&follow.login)
+                    .map(|ids| library::new_videos(ids, follow.seen));
+                (new, follow)
+            })
+            .collect()
+    });
+    // Channels with new videos first, then by name.
+    follows.sort_by_cached_key(|(new, follow)| {
+        (
+            std::cmp::Reverse(new.unwrap_or(0)),
+            follow.name.to_lowercase(),
+        )
+    });
+    ui.set_twitch_following_total(follows.len() as i32);
+    if !ui.get_twitch_following_all() {
+        follows.truncate(FOLLOWING_PREVIEW);
+    }
+    let cards: Vec<_> = follows
+        .into_iter()
+        .map(|(new, follow)| {
+            let name = if follow.name.is_empty() {
+                follow.login.clone()
+            } else {
+                follow.name
+            };
+            TwitchFollow {
+                initials: initials(&name).into(),
+                tone: tone(&name),
+                status: match new {
+                    None => "".into(),
+                    Some(0) => "Up to date".into(),
+                    Some(1) => "1 new video".into(),
+                    Some(n) if n >= api::LATEST_PAGE as usize => format!("{n}+ new videos").into(),
+                    Some(n) => format!("{n} new videos").into(),
+                },
+                fresh: new.is_some_and(|n| n > 0),
+                login: follow.login.into(),
+                name: name.into(),
+                picture: follow.picture.into(),
+            }
+        })
+        .collect();
+    ui.set_twitch_recent(ModelRc::new(VecModel::from(recent)));
+    ui.set_twitch_following_list(ModelRc::new(VecModel::from(cards)));
+    show_bookmarks(ui);
 }
 
 /// Local bookmarks and watch progress, kept in `twitch_library`.
 fn wire_library(app: &AppWindow) {
     let ui = app.global::<AppState>();
-    ui.on_twitch_bookmarked(|id, _| crate::twitch_library::shared().bookmarked(&id));
-    ui.on_twitch_progress(|id, _| crate::twitch_library::shared().progress(&id));
+    ui.on_twitch_bookmarked(|id, _| library::shared().bookmarked(&id));
+    ui.on_twitch_progress(|id, _| library::shared().progress(&id));
+    ui.on_twitch_following(|login, _| library::shared().following(&login));
     let weak = app.as_weak();
     ui.on_twitch_toggle_bookmark(move |id| {
         let Some(app) = weak.upgrade() else {
@@ -182,7 +440,7 @@ fn wire_library(app: &AppWindow) {
         };
         let ui = app.global::<AppState>();
         let error = {
-            let mut library = crate::twitch_library::shared();
+            let mut library = library::shared();
             if !library.known(&id)
                 && let Some(video) = loaded(&id)
             {
@@ -202,15 +460,7 @@ fn wire_library(app: &AppWindow) {
             ui.set_toast(format!("{error:#}").into());
         }
         ui.set_twitch_library_epoch(ui.get_twitch_library_epoch() + 1);
-        if ui.get_twitch_search_mode() == BOOKMARKS_MODE {
-            show_bookmarks(&ui);
-        }
-    });
-    let weak = app.as_weak();
-    ui.on_twitch_bookmarks_changed(move || {
-        if let Some(app) = weak.upgrade() {
-            show_bookmarks(&app.global::<AppState>());
-        }
+        show_bookmarks(&ui);
     });
     // The player has no hook for Twitch, so its position is read on a timer.
     let timer = Rc::new(slint::Timer::default());
@@ -237,7 +487,7 @@ fn wire_library(app: &AppWindow) {
             f64::from(ui.get_player_position())
         };
         let id = ui.get_player_video_id();
-        let mut library = crate::twitch_library::shared();
+        let mut library = library::shared();
         if library.record(&id, position, length, crate::history::now()) {
             // A failed write is retried on the next tick.
             let _ = library.save();
@@ -260,7 +510,7 @@ fn loaded(id: &str) -> Option<SearchResult> {
 }
 
 fn remember(id: &str, title: &str, channel: &str) {
-    let mut library = crate::twitch_library::shared();
+    let mut library = library::shared();
     let video = loaded(id).or_else(|| {
         (!library.known(id)).then(|| SearchResult {
             id: id.into(),
@@ -276,24 +526,10 @@ fn remember(id: &str, title: &str, channel: &str) {
     }
 }
 
-/// Bookmarks are local, so the search text filters them as it's typed.
+/// All local bookmarks, newest first.
 fn show_bookmarks(ui: &AppState) {
-    let filter = ui.get_twitch_search_text().to_string();
-    let mut entries: Vec<_> = crate::twitch_library::shared()
-        .bookmarks()
-        .into_iter()
-        .filter(|entry| api::matches_filter(&entry.video, &filter))
-        .collect();
-    match ui.get_twitch_sort() {
-        1 => entries.sort_by_key(|e| std::cmp::Reverse((e.watched_at, e.bookmarked_at))),
-        2 => entries.sort_by_cached_key(|e| {
-            (
-                e.video.subtitle.to_lowercase(),
-                std::cmp::Reverse(e.bookmarked_at),
-            )
-        }),
-        _ => entries.sort_by_key(|e| std::cmp::Reverse(e.bookmarked_at)),
-    }
+    let mut entries: Vec<_> = library::shared().bookmarks().into_iter().collect();
+    entries.sort_by_key(|e| std::cmp::Reverse(e.bookmarked_at));
     let rows: Vec<_> = entries.into_iter().map(|e| row(e.video)).collect();
     ui.set_twitch_bookmarks(ModelRc::new(VecModel::from(rows)));
 }
@@ -308,35 +544,64 @@ fn prepare_operations(runtime: &tokio::runtime::Handle, client: &Option<Arc<Clie
     });
 }
 
-fn run_search(ui: &AppState, task: &Task, query: String, cursor: Option<String>) {
+fn run_search(ui: &AppState, task: &Task, query: String, cursor: Option<String>, channels: bool) {
     let Some(client) = task.client.clone() else {
         ui.set_twitch_error("Could not open the SlintYT config folder.".into());
         return;
     };
-    let mode = if ui.get_twitch_results_mode() == 1 {
+    let mode = if channels {
         SearchMode::User
     } else {
         SearchMode::Video
     };
     let epoch = task.generation.fetch_add(1, Ordering::Relaxed) + 1;
-    ui.set_twitch_busy(true);
-    ui.set_twitch_error("".into());
+    if channels {
+        ui.set_twitch_channels_busy(true);
+        ui.set_twitch_channels_error("".into());
+    } else {
+        ui.set_twitch_busy(true);
+        ui.set_twitch_error("".into());
+    }
     let (weak, generation) = (task.weak.clone(), task.generation.clone());
     task.runtime.spawn(async move {
-        let result = client.search(mode, &query, cursor.as_deref()).await;
+        let mut result = client.search(mode, &query, cursor.as_deref()).await;
+        if !channels && let Ok(page) = &mut result {
+            video_avatars(&client, page).await;
+        }
         update(&weak, move |app| {
             if generation.load(Ordering::Relaxed) != epoch {
                 return;
             }
             let ui = app.global::<AppState>();
-            ui.set_twitch_busy(false);
+            if channels {
+                ui.set_twitch_channels_busy(false);
+            } else {
+                ui.set_twitch_busy(false);
+            }
             match result {
                 Ok(page) => {
-                    LISTS.with_borrow_mut(|lists| lists.search.extend(page.results));
-                    ui.set_twitch_cursor(page.cursor.unwrap_or_default().into());
+                    let total = page
+                        .total
+                        .unwrap_or(page.results.len() as u64)
+                        .min(i32::MAX as u64) as i32;
+                    if channels {
+                        LISTS.with_borrow_mut(|lists| lists.channels.extend(page.results));
+                        ui.set_twitch_channel_cursor(page.cursor.unwrap_or_default().into());
+                        ui.set_twitch_channel_total(total.max(ui.get_twitch_channel_total()));
+                    } else {
+                        LISTS.with_borrow_mut(|lists| lists.search.extend(page.results));
+                        ui.set_twitch_cursor(page.cursor.unwrap_or_default().into());
+                        ui.set_twitch_video_total(total.max(ui.get_twitch_video_total()));
+                    }
                     show_search(&ui);
                 }
-                Err(error) => ui.set_twitch_error(format!("{error:#}").into()),
+                Err(error) => {
+                    if channels {
+                        ui.set_twitch_channels_error(format!("{error:#}").into());
+                    } else {
+                        ui.set_twitch_error(format!("{error:#}").into());
+                    }
+                }
             }
         });
     });
@@ -387,9 +652,12 @@ fn run_user(ui: &AppState, task: &Task, cursor: Option<String>) {
     ui.set_twitch_user_error("".into());
     let (weak, generation) = (task.weak.clone(), task.generation.clone());
     task.runtime.spawn(async move {
-        let result = client
+        let mut result = client
             .user_videos(&login, kind, popular, cursor.as_deref())
             .await;
+        if let Ok(page) = &mut result {
+            video_avatars(&client, page).await;
+        }
         update(&weak, move |app| {
             if generation.load(Ordering::Relaxed) != epoch {
                 return;
@@ -412,12 +680,34 @@ fn run_user(ui: &AppState, task: &Task, cursor: Option<String>) {
 }
 
 fn show_search(ui: &AppState) {
-    let users = ui.get_twitch_results_mode() == 1;
-    let rows: Vec<_> = LISTS.with_borrow(|lists| {
-        api::sorted(&lists.search, users, ui.get_twitch_sort())
+    let channel_sort = if ui.get_twitch_results_tab() == 1 {
+        ui.get_twitch_sort()
+    } else {
+        0
+    };
+    let channels = LISTS.with_borrow(|lists| {
+        api::sorted(&lists.channels, true, channel_sort)
             .into_iter()
             .map(row)
             .collect()
+    });
+    if let Some(rows) = replacement(&ui.get_twitch_channels(), channels) {
+        ui.set_twitch_channels(rows);
+    }
+    let rows: Vec<_> = LISTS.with_borrow(|lists| {
+        api::sorted(
+            &lists.search,
+            false,
+            if ui.get_twitch_results_tab() == 1 {
+                0
+            } else {
+                ui.get_twitch_sort()
+            },
+        )
+        .into_iter()
+        .filter(|r| api::length_matches(r.seconds, ui.get_twitch_length()))
+        .map(row)
+        .collect()
     });
     if let Some(rows) = replacement(&ui.get_twitch_results(), rows) {
         ui.set_twitch_results(rows);
@@ -474,9 +764,33 @@ fn replacement(
 }
 
 fn row(result: SearchResult) -> TwitchResult {
+    let video = !result.duration.is_empty();
+    let label = if video {
+        &result.subtitle
+    } else {
+        &result.title
+    };
+    let stats = if video {
+        let views = api::views(result.count);
+        if result.published_at > 0 {
+            format!(
+                "{views} · {}",
+                api::ago(result.published_at, crate::history::now())
+            )
+        } else {
+            views
+        }
+    } else {
+        api::followers(result.count)
+    };
     TwitchResult {
-        initials: initials(&result.title).into(),
-        tone: tone(&result.title),
+        initials: initials(label).into(),
+        tone: tone(label),
+        channel: result.subtitle.clone().into(),
+        stats: stats.into(),
+        game: result.game.into(),
+        kind: result.kind.into(),
+        avatar: result.avatar.into(),
         id: result.id.into(),
         title: result.title.into(),
         subtitle: result.subtitle.into(),
@@ -484,4 +798,77 @@ fn row(result: SearchResult) -> TwitchResult {
         duration: result.duration.into(),
         picture: result.picture.into(),
     }
+}
+
+/// Video queries sometimes omit profile images. Channel search supplies them,
+/// using the same disk cache as ordinary searches and matching the exact login.
+async fn video_avatars(client: &Arc<Client>, page: &mut api::SearchPage) {
+    let logins: std::collections::HashSet<_> = page
+        .results
+        .iter()
+        .filter(|video| video.avatar.is_empty() && !video.channel.is_empty())
+        .map(|video| video.channel.to_lowercase())
+        .collect();
+    let mut requests = tokio::task::JoinSet::new();
+    for login in logins {
+        let client = client.clone();
+        requests.spawn(async move {
+            let page = client.search(SearchMode::User, &login, None).await.ok()?;
+            let picture = page
+                .results
+                .into_iter()
+                .find(|channel| channel.id.eq_ignore_ascii_case(&login))?
+                .picture;
+            Some((login, picture))
+        });
+    }
+    let mut avatars = HashMap::new();
+    while let Some(result) = requests.join_next().await {
+        if let Ok(Some((login, picture))) = result {
+            avatars.insert(login, picture);
+        }
+    }
+    for video in &mut page.results {
+        if video.avatar.is_empty()
+            && let Some(picture) = avatars.get(&video.channel.to_lowercase())
+        {
+            video.avatar = picture.clone();
+        }
+    }
+}
+
+fn refresh_bookmark_avatars(task: &Task) {
+    let Some(client) = task.client.clone() else {
+        return;
+    };
+    let results: Vec<_> = library::shared()
+        .bookmarks()
+        .into_iter()
+        .map(|entry| entry.video)
+        .filter(|video| video.avatar.is_empty() && !video.channel.is_empty())
+        .collect();
+    if results.is_empty() {
+        return;
+    }
+    let weak = task.weak.clone();
+    task.runtime.spawn(async move {
+        let mut page = api::SearchPage {
+            results,
+            ..Default::default()
+        };
+        video_avatars(&client, &mut page).await;
+        update(&weak, move |app| {
+            let mut library = library::shared();
+            for video in page
+                .results
+                .into_iter()
+                .filter(|video| !video.avatar.is_empty())
+            {
+                library.remember(video);
+            }
+            let _ = library.save();
+            drop(library);
+            show_bookmarks(&app.global::<AppState>());
+        });
+    });
 }

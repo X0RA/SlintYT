@@ -1,6 +1,6 @@
-//! Twitch videos watched or bookmarked here. Twitch has no account in the app,
-//! so progress and bookmarks stay on this computer, in one file in the config
-//! folder.
+//! Twitch videos watched or bookmarked here, channels followed, and recent
+//! searches. Twitch has no account in the app, so all of it stays on this
+//! computer, in one file in the config folder.
 use crate::twitch::SearchResult;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -16,6 +16,7 @@ const WATCHED_LIMIT: usize = 1000;
 /// Starting over is more useful than resuming a few seconds in, or at the credits.
 const RESUME_AFTER: f64 = 10.;
 const RESUME_BEFORE_END: f64 = 30.;
+const SEARCH_LIMIT: usize = 12;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -38,16 +39,41 @@ impl Entry {
     }
 }
 
+/// A followed channel, as its page showed it when it was followed.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Follow {
+    pub login: String,
+    pub name: String,
+    pub picture: String,
+    pub followed_at: u64,
+    /// The newest video ID when the channel was last opened. Twitch's video
+    /// IDs only grow, so larger ones are new. None until first checked.
+    pub seen: Option<u64>,
+}
+
+/// `mode` follows the search radio: 0 for videos, 1 for users.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RecentSearch {
+    pub query: String,
+    pub mode: i32,
+}
+
 #[derive(Default, Serialize, Deserialize)]
+#[serde(default)]
 struct Saved {
-    #[serde(default)]
     videos: BTreeMap<String, Entry>,
+    follows: BTreeMap<String, Follow>,
+    searches: Vec<RecentSearch>,
 }
 
 #[derive(Default)]
 pub struct Library {
     path: Option<PathBuf>,
     videos: BTreeMap<String, Entry>,
+    follows: BTreeMap<String, Follow>,
+    searches: Vec<RecentSearch>,
 }
 
 static LIBRARY: LazyLock<Mutex<Library>> = LazyLock::new(|| {
@@ -74,17 +100,23 @@ fn key(id: &str) -> Option<&str> {
 impl Library {
     /// A missing or unreadable file starts an empty library.
     pub fn load(path: PathBuf) -> Self {
-        let videos = fs::read(&path)
+        let saved = fs::read(&path)
             .ok()
             .and_then(|bytes| serde_json::from_slice::<Saved>(&bytes).ok())
-            .map(|saved| saved.videos)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|(id, _)| key(id).is_some())
-            .collect();
+            .unwrap_or_default();
         Self {
             path: Some(path),
-            videos,
+            videos: saved
+                .videos
+                .into_iter()
+                .filter(|(id, _)| key(id).is_some())
+                .collect(),
+            follows: saved
+                .follows
+                .into_iter()
+                .filter(|(login, _)| valid_login(login))
+                .collect(),
+            searches: saved.searches,
         }
     }
 
@@ -174,6 +206,75 @@ impl Library {
         self.videos.get(key(id)?)
     }
 
+    /// Returns whether the channel is followed now.
+    pub fn toggle_follow(&mut self, mut follow: Follow, now: u64) -> bool {
+        if !valid_login(&follow.login) {
+            return false;
+        }
+        if self.follows.remove(&follow.login).is_some() {
+            return false;
+        }
+        follow.followed_at = now;
+        follow.seen = None;
+        self.follows.insert(follow.login.clone(), follow);
+        true
+    }
+
+    pub fn following(&self, login: &str) -> bool {
+        self.follows.contains_key(login)
+    }
+
+    pub fn follow(&self, login: &str) -> Option<&Follow> {
+        self.follows.get(login)
+    }
+
+    pub fn follows(&self) -> Vec<Follow> {
+        self.follows.values().cloned().collect()
+    }
+
+    /// Records the newest video as seen. Returns whether anything changed.
+    pub fn mark_seen(&mut self, login: &str, newest: u64) -> bool {
+        match self.follows.get_mut(login) {
+            Some(follow) if follow.seen < Some(newest) => {
+                follow.seen = Some(newest);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// A repeated search moves to the front instead of appearing twice.
+    pub fn add_search(&mut self, query: &str, mode: i32) {
+        let query = query.trim();
+        if query.is_empty() {
+            return;
+        }
+        self.searches
+            .retain(|s| s.mode != mode || !s.query.eq_ignore_ascii_case(query));
+        self.searches.insert(
+            0,
+            RecentSearch {
+                query: query.into(),
+                mode,
+            },
+        );
+        self.searches.truncate(SEARCH_LIMIT);
+    }
+
+    pub fn remove_search(&mut self, index: usize) {
+        if index < self.searches.len() {
+            self.searches.remove(index);
+        }
+    }
+
+    pub fn clear_searches(&mut self) {
+        self.searches.clear();
+    }
+
+    pub fn searches(&self) -> &[RecentSearch] {
+        &self.searches
+    }
+
     pub fn save(&mut self) -> Result<()> {
         self.prune();
         let Some(path) = &self.path else {
@@ -183,6 +284,8 @@ impl Library {
             path,
             &Saved {
                 videos: self.videos.clone(),
+                follows: self.follows.clone(),
+                searches: self.searches.clone(),
             },
         )
     }
@@ -206,14 +309,27 @@ impl Library {
     }
 }
 
+/// Twitch logins are short and only use letters, digits and underscores.
+fn valid_login(login: &str) -> bool {
+    (1..=25).contains(&login.len())
+        && login
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+}
+
+/// How many of a channel's newest video IDs are newer than the one last seen.
+pub fn new_videos(ids: &[u64], seen: Option<u64>) -> usize {
+    seen.map_or(0, |seen| ids.iter().filter(|id| **id > seen).count())
+}
+
 fn write(path: &Path, saved: &Saved) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).context("Could not create the SlintYT config folder.")?;
     }
     let temporary = path.with_extension("json.tmp");
     fs::write(&temporary, serde_json::to_vec(saved)?)
-        .context("Could not save Twitch bookmarks and progress.")?;
-    fs::rename(temporary, path).context("Could not save Twitch bookmarks and progress.")?;
+        .context("Could not save your Twitch library.")?;
+    fs::rename(temporary, path).context("Could not save your Twitch library.")?;
     Ok(())
 }
 
@@ -286,6 +402,69 @@ mod tests {
         assert_eq!(entry.position, 60.);
         library.remember(video("abc", 1));
         assert!(!library.known("abc"));
+    }
+
+    fn follow(login: &str) -> Follow {
+        Follow {
+            login: login.into(),
+            name: login.to_uppercase(),
+            ..Follow::default()
+        }
+    }
+
+    #[test]
+    fn follows_and_searches_survive_a_reload() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("twitch-library.json");
+        let mut library = Library::load(path.clone());
+        assert!(library.toggle_follow(follow("runner"), 5));
+        assert!(!library.toggle_follow(follow("bad login"), 5));
+        assert!(library.toggle_follow(follow("other"), 6));
+        assert!(!library.toggle_follow(follow("other"), 7));
+        assert!(library.mark_seen("runner", 100));
+        assert!(!library.mark_seen("runner", 90));
+        assert!(!library.mark_seen("nobody", 100));
+        library.add_search("speedrun", 0);
+        library.add_search("runner", 1);
+        library.add_search("  SPEEDRUN ", 0);
+        library.add_search("", 0);
+        library.save().unwrap();
+        let library = Library::load(path);
+        assert!(library.following("runner") && !library.following("other"));
+        let runner = &library.follows()[0];
+        assert_eq!((runner.followed_at, runner.seen), (5, Some(100)));
+        let searches: Vec<_> = library
+            .searches()
+            .iter()
+            .map(|s| (s.query.as_str(), s.mode))
+            .collect();
+        assert_eq!(searches, [("SPEEDRUN", 0), ("runner", 1)]);
+    }
+
+    #[test]
+    fn searches_are_capped_and_can_be_removed() {
+        let mut library = Library::default();
+        for i in 0..SEARCH_LIMIT + 3 {
+            library.add_search(&format!("q{i}"), 0);
+        }
+        assert_eq!(library.searches().len(), SEARCH_LIMIT);
+        assert_eq!(
+            library.searches()[0].query,
+            format!("q{}", SEARCH_LIMIT + 2)
+        );
+        library.remove_search(0);
+        library.remove_search(99);
+        assert_eq!(library.searches().len(), SEARCH_LIMIT - 1);
+        library.clear_searches();
+        assert!(library.searches().is_empty());
+    }
+
+    #[test]
+    fn counts_videos_newer_than_the_last_one_seen() {
+        let ids = [105, 104, 100, 99];
+        assert_eq!(new_videos(&ids, Some(100)), 2);
+        assert_eq!(new_videos(&ids, Some(105)), 0);
+        assert_eq!(new_videos(&ids, None), 0);
     }
 
     #[test]

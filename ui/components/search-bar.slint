@@ -8,6 +8,8 @@ export component SearchBar inherits Rectangle {
     private property <int> focus-serial: AppState.search-focus-serial;
     changed focus-serial => { search-field.focus(); }
     public function focus-search() { search-field.focus(); }
+    public function blur() { search-field.clear-focus(); }
+    out property <bool> focused: search-field.has-focus;
     height: 48px; max-width: 600px; min-width: 100px;
     border-radius: 26px; border-width: 1px; border-color: search-field.has-focus ? #44444e : Theme.border;
     background: #1a1a1e;

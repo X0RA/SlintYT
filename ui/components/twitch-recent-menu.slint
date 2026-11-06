@@ -1,0 +1,48 @@
+import { Theme } from "../theme.slint";
+import { AppState } from "../state.slint";
+import { Icon } from "icon.slint";
+// Recent Twitch searches, under the search bar while it's focused. The list
+// matches what's typed so far.
+export component TwitchRecentMenu inherits Rectangle {
+    callback picked(string);
+    height: list.preferred-height;
+    border-radius: 18px; border-width: 1px; border-color: #44444e;
+    background: #1a1a1e;
+    drop-shadow-color: #000000aa; drop-shadow-blur: 24px; drop-shadow-offset-y: 10px;
+    clip: true;
+    // Keeps clicks between rows from reaching the page underneath.
+    TouchArea {}
+    list := VerticalLayout {
+        padding-top: 6px; padding-bottom: 6px;
+        HorizontalLayout { height: 30px; padding-left: 18px; padding-right: 14px;
+            Text { text: "Recent searches"; color: Theme.subtle; font-size: 12px; font-weight: 500; vertical-alignment: center; horizontal-stretch: 1; }
+            twitch-recent-clear := Rectangle {
+                width: clear-label.preferred-width; accessible-role: button; accessible-label: "Clear recent searches";
+                accessible-action-default => { AppState.twitch-recent-clear(); }
+                clear-label := Text { text: "Clear all"; color: clear-touch.has-hover ? Theme.text : Theme.muted; font-size: 12px; vertical-alignment: center; }
+                clear-touch := TouchArea { mouse-cursor: pointer; clicked => { AppState.twitch-recent-clear(); } }
+            }
+        }
+        for item in AppState.twitch-recent : twitch-recent-item := Rectangle {
+            height: 40px;
+            background: row-touch.has-hover ? Theme.hover : transparent;
+            accessible-role: button; accessible-label: "Search for " + item.query;
+            accessible-action-default => { root.picked(item.query); }
+            row-touch := TouchArea { mouse-cursor: pointer; clicked => { root.picked(item.query); } }
+            HorizontalLayout {
+                padding-left: 18px; padding-right: 10px; spacing: 12px;
+                Icon { name: "clock"; width: 16px; height: 16px; y: (parent.height - self.height) / 2; tint: Theme.subtle; }
+                Text { text: item.query; color: Theme.text; font-size: 14px; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                remove := Rectangle {
+                    width: 28px; height: 28px; y: (parent.height - self.height) / 2; border-radius: 14px;
+                    background: remove-touch.has-hover ? #34343d : transparent;
+                    opacity: row-touch.has-hover || remove-touch.has-hover ? 1 : 0;
+                    accessible-role: button; accessible-label: "Remove " + item.query + " from recent searches";
+                    accessible-action-default => { AppState.twitch-recent-remove(item.query); }
+                    Icon { name: "close"; width: 12px; height: 12px; tint: remove-touch.has-hover ? Theme.text : Theme.subtle; }
+                    remove-touch := TouchArea { mouse-cursor: pointer; clicked => { AppState.twitch-recent-remove(item.query); } }
+                }
+            }
+        }
+    }
+}

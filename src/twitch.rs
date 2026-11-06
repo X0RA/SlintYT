@@ -23,6 +23,8 @@ const SEARCH_OPERATION: &str = "SearchResultsPage_SearchResults";
 const VIDEOS_OPERATION: &str = "FilterableVideoTower_Videos";
 const ABOUT_OPERATION: &str = "ChannelRoot_AboutPanel";
 const VIDEO_PAGE: u32 = 50;
+/// Follows show "30+ new videos" past this many.
+pub const LATEST_PAGE: u32 = 30;
 const OPERATIONS_LIMIT: usize = 8 * 1024 * 1024;
 const RESPONSE_LIMIT: usize = 4 * 1024 * 1024;
 /// Rejected hashes trigger at most one GitHub check in this many seconds.
@@ -69,6 +71,15 @@ impl VideoKind {
         }
     }
 
+    /// The badge on a video's thumbnail.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::PastBroadcast => "Broadcast",
+            Self::Highlight => "Highlight",
+            Self::Upload => "Upload",
+        }
+    }
+
     fn broadcast_type(self) -> &'static str {
         match self {
             Self::PastBroadcast => "ARCHIVE",
@@ -87,9 +98,21 @@ pub struct SearchResult {
     pub metadata: String,
     pub duration: String,
     pub picture: String,
+    #[serde(default)]
+    pub avatar: String,
     pub count: u64,
     pub seconds: u64,
     pub date: String,
+    /// Videos only: the game, the channel's login, when it was published,
+    /// and its kind when the list says, such as "Highlight".
+    #[serde(default)]
+    pub game: String,
+    #[serde(default)]
+    pub channel: String,
+    #[serde(default)]
+    pub published_at: u64,
+    #[serde(default)]
+    pub kind: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,10 +121,13 @@ pub struct UserInfo {
     pub followers: String,
 }
 
+/// `total` is how many matches search found overall, when it says.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchPage {
     pub results: Vec<SearchResult>,
     pub cursor: Option<String>,
+    #[serde(default)]
+    pub total: Option<u64>,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -157,7 +183,7 @@ impl Client {
             target["cursor"] = cursor.into();
         }
         let variables = json!({ "query": query, "options": { "targets": [target] } });
-        self.cached("search-v2", &key, SEARCH_OPERATION, &variables, |data| {
+        self.cached("search-v3", &key, SEARCH_OPERATION, &variables, |data| {
             parse_search(data, mode)
         })
         .await
@@ -185,9 +211,27 @@ impl Client {
         if let Some(cursor) = cursor {
             variables["cursor"] = cursor.into();
         }
+        self.cached("videos-v2", &key, VIDEOS_OPERATION, &variables, |data| {
+            // Only this list says which kind its videos are.
+            let mut page = parse_videos(data)?;
+            for video in &mut page.results {
+                video.kind = kind.label().into();
+            }
+            Ok(page)
+        })
+        .await
+    }
+
+    /// A channel's newest videos of every kind, for counting the new ones.
+    pub async fn latest_videos(&self, login: &str) -> Result<SearchPage> {
+        let variables = json!({
+            "channelOwnerLogin": login,
+            "limit": LATEST_PAGE,
+            "videoSort": "TIME",
+        });
         self.cached(
-            "videos-v1",
-            &key,
+            "latest-v2",
+            login,
             VIDEOS_OPERATION,
             &variables,
             parse_videos,
@@ -414,7 +458,11 @@ fn parse_search(data: &Value, mode: SearchMode) -> Result<SearchPage> {
         .as_str()
         .filter(|cursor| !cursor.is_empty() && !results.is_empty())
         .map(str::to_owned);
-    Ok(SearchPage { results, cursor })
+    Ok(SearchPage {
+        results,
+        cursor,
+        total: section["totalMatches"].as_u64(),
+    })
 }
 
 fn parse_videos(data: &Value) -> Result<SearchPage> {
@@ -434,7 +482,11 @@ fn parse_videos(data: &Value) -> Result<SearchPage> {
         .iter()
         .filter_map(|edge| video_result(&edge["node"]))
         .collect();
-    Ok(SearchPage { results, cursor })
+    Ok(SearchPage {
+        results,
+        cursor,
+        total: None,
+    })
 }
 
 fn parse_user(data: &Value) -> Result<UserInfo> {
@@ -448,7 +500,7 @@ fn parse_user(data: &Value) -> Result<UserInfo> {
     })
 }
 
-fn followers(count: u64) -> String {
+pub fn followers(count: u64) -> String {
     format!(
         "{} {}",
         compact(count),
@@ -463,7 +515,9 @@ pub fn sorted(results: &[SearchResult], users: bool, sort: i32) -> Vec<SearchRes
     match (users, sort) {
         (true, 1) | (false, 1) => results.sort_by_key(|r| std::cmp::Reverse(r.count)),
         (true, 2) => results.sort_by_key(|r| r.title.to_lowercase()),
-        (false, 2) => results.sort_by(|a, b| b.date.cmp(&a.date)),
+        (false, 2) => {
+            results.sort_by(|a, b| (b.published_at, &b.date).cmp(&(a.published_at, &a.date)))
+        }
         (false, 3) => results.sort_by_key(|r| std::cmp::Reverse(r.seconds)),
         _ => {}
     }
@@ -490,12 +544,11 @@ fn video_result(item: &Value) -> Option<SearchResult> {
         .or_else(|| item["previewThumbnailURL"].as_str().map(str::to_owned))
         .unwrap_or_default();
     let views = item["viewCount"].as_u64().unwrap_or(0);
-    let date = item["createdAt"]
+    let created = item["createdAt"]
         .as_str()
         .or_else(|| item["publishedAt"].as_str())
-        .and_then(|date| date.get(..10))
-        .unwrap_or_default()
-        .to_owned();
+        .unwrap_or_default();
+    let date = created.get(..10).unwrap_or_default().to_owned();
     let parts = [
         item["game"]["displayName"].as_str().map(str::to_owned),
         Some(format!(
@@ -510,12 +563,17 @@ fn video_result(item: &Value) -> Option<SearchResult> {
         id: id.into(),
         title: text(&item["title"]),
         subtitle: text(&item["owner"]["displayName"]),
+        avatar: text(&item["owner"]["profileImageURL"]),
         metadata: parts.into_iter().flatten().collect::<Vec<_>>().join(" · "),
         duration: clock(seconds),
         picture,
         count: views,
         seconds,
         date,
+        game: text(&item["game"]["displayName"]),
+        channel: text(&item["owner"]["login"]),
+        published_at: timestamp(created).unwrap_or(0),
+        kind: String::new(),
     })
 }
 
@@ -531,11 +589,67 @@ fn user_result(item: &Value) -> Option<SearchResult> {
             title
         },
         subtitle: format!("@{login} · {}", followers(count)),
-        metadata: text(&item["broadcastSettings"]["title"]),
+        // The channel's own description, or else its stream title.
+        metadata: Some(text(&item["description"]))
+            .filter(|description| !description.trim().is_empty())
+            .unwrap_or_else(|| text(&item["broadcastSettings"]["title"])),
         picture: text(&item["profileImageURL"]),
         count,
         ..SearchResult::default()
     })
+}
+
+/// Reads Twitch's UTC times, such as `2026-11-05T16:03:19Z`, as Unix seconds.
+pub fn timestamp(time: &str) -> Option<u64> {
+    let number = |range: std::ops::Range<usize>| time.get(range)?.parse::<i64>().ok();
+    let (year, month, day) = (number(0..4)?, number(5..7)?, number(8..10)?);
+    let (hour, minute, second) = (number(11..13)?, number(14..16)?, number(17..19)?);
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) || hour > 23 || minute > 59 {
+        return None;
+    }
+    // Days since 1970-01-01, from Howard Hinnant's days_from_civil.
+    let year = if month <= 2 { year - 1 } else { year };
+    let era = year.div_euclid(400);
+    let year_of_era = year - era * 400;
+    let day_of_year = (153 * ((month + 9) % 12) + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146_097 + day_of_era - 719_468;
+    u64::try_from(days * 86_400 + hour * 3600 + minute * 60 + second.min(59)).ok()
+}
+
+/// "3 days ago" and the like, or nothing for an unknown time.
+pub fn ago(time: u64, now: u64) -> String {
+    if time == 0 {
+        return String::new();
+    }
+    let seconds = now.saturating_sub(time);
+    let (count, unit) = match seconds {
+        0..60 => return "just now".into(),
+        60..3600 => (seconds / 60, "minute"),
+        3600..86_400 => (seconds / 3600, "hour"),
+        86_400..2_592_000 => (seconds / 86_400, "day"),
+        2_592_000..31_536_000 => (seconds / 2_592_000, "month"),
+        _ => (seconds / 31_536_000, "year"),
+    };
+    format!("{count} {unit}{} ago", if count == 1 { "" } else { "s" })
+}
+
+/// The Length filter's choices: any, under 30 minutes, 30 minutes to 2 hours, over 2 hours.
+pub fn length_matches(seconds: u64, filter: i32) -> bool {
+    match filter {
+        1 => seconds < 30 * 60,
+        2 => (30 * 60..2 * 3600).contains(&seconds),
+        3 => seconds >= 2 * 3600,
+        _ => true,
+    }
+}
+
+pub fn views(count: u64) -> String {
+    format!(
+        "{} {}",
+        compact(count),
+        if count == 1 { "view" } else { "views" }
+    )
 }
 
 fn text(value: &Value) -> String {
@@ -610,14 +724,15 @@ mod tests {
 
     #[test]
     fn parses_videos() {
-        let data = json!({ "searchFor": { "videos": { "cursor": "MTU=", "edges": [{ "item": {
+        let data = json!({ "searchFor": { "videos": { "cursor": "MTU=", "totalMatches": 170, "edges": [{ "item": {
             "id": "42", "title": "Any% run", "lengthSeconds": 6631, "viewCount": 12500,
             "createdAt": "2026-11-04T17:32:28Z",
-            "owner": { "displayName": "Runner" }, "game": { "displayName": "Celeste" },
+            "owner": { "displayName": "Runner", "login": "runner", "profileImageURL": "https://example.com/runner.png" }, "game": { "displayName": "Celeste" },
             "templatePreviewThumbnailURL": "https://static-cdn.jtvnw.net/t-{width}x{height}.jpg",
         } }, { "item": { "title": "No ID" } }] } } });
         let page = parse_search(&data, SearchMode::Video).unwrap();
         assert_eq!(page.cursor.as_deref(), Some("MTU="));
+        assert_eq!(page.total, Some(170));
         assert_eq!(
             page.results,
             [SearchResult {
@@ -627,9 +742,14 @@ mod tests {
                 metadata: "Celeste · 12.5K views · 2026-11-04".into(),
                 duration: "1:50:31".into(),
                 picture: "https://static-cdn.jtvnw.net/t-320x180.jpg".into(),
+                avatar: "https://example.com/runner.png".into(),
                 count: 12500,
                 seconds: 6631,
                 date: "2026-11-04".into(),
+                game: "Celeste".into(),
+                channel: "runner".into(),
+                published_at: 1_793_813_548,
+                kind: String::new(),
             }]
         );
     }
@@ -708,6 +828,29 @@ mod tests {
         assert!(matches_filter(&all[1], ""));
         assert!(matches_filter(&all[1], "a CELESTE"));
         assert!(!matches_filter(&all[1], "a portal"));
+    }
+
+    #[test]
+    fn reads_twitch_times_and_says_how_long_ago() {
+        assert_eq!(timestamp("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(timestamp("2026-11-04T17:32:28Z"), Some(1_793_813_548));
+        assert_eq!(timestamp("2024-02-29T12:00:00.5Z"), Some(1_709_208_000));
+        assert_eq!(timestamp("2026-13-01T00:00:00Z"), None);
+        assert_eq!(timestamp("yesterday"), None);
+        let now = 1_000_000_000;
+        assert_eq!(ago(now - 30, now), "just now");
+        assert_eq!(ago(now - 3600, now), "1 hour ago");
+        assert_eq!(ago(now - 2 * 86_400, now), "2 days ago");
+        assert_eq!(ago(now - 400 * 86_400, now), "1 year ago");
+        assert_eq!(ago(0, now), "");
+    }
+
+    #[test]
+    fn filters_videos_by_length() {
+        assert!(length_matches(100_000, 0));
+        assert!(length_matches(29 * 60, 1) && !length_matches(30 * 60, 1));
+        assert!(length_matches(30 * 60, 2) && !length_matches(2 * 3600, 2));
+        assert!(length_matches(2 * 3600, 3) && !length_matches(3599, 3));
     }
 
     #[test]

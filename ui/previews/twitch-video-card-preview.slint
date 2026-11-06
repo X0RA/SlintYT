@@ -1,0 +1,23 @@
+import { TwitchVideoCard } from "../components/twitch-video-card.slint";
+import { VideoCard } from "../components/video-card.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData, TwitchResult, TwitchRecent, TwitchFollow } from "../state.slint";
+export component AppWindow inherits Window {
+    title: "Shared YouTube and Twitch cards";
+    preferred-width: 900px; height: 600px; background: #0e0e10;
+    VerticalLayout { padding: 24px; spacing: 20px; alignment: start;
+        HorizontalLayout { spacing: 20px;
+            VideoCard {
+                width: 400px; bookmarks-available: true; bookmark-membership: 1; channel-links: false;
+                video: { id: "youtube", title: "YouTube card with a long title that elides", channel: "Example channel", metadata: "12K views · 2 days ago", duration: "1:50:31", initials: "EC", tone: #4b3ab3, thumbnail: @image-url("mock-thumbnail.svg") };
+            }
+            TwitchVideoCard {
+                width: 400px; thumbnail: @image-url("mock-thumbnail.svg"); bookmarked: true; progress: 52;
+                item: { id: "42", title: "Twitch card with a long title that elides", channel: "Example channel", stats: "12K views · 2 days ago", game: "Celeste", duration: "1:50:31", initials: "EC", tone: #4b3ab3 };
+            }
+        }
+        HorizontalLayout { spacing: 20px;
+            TwitchVideoCard { width: 250px; bookmarked: false; progress: 0; item: { id: "43", title: "Thumbnail loading", channel: "Channel", initials: "C", tone: #4b3ab3 }; }
+            TwitchVideoCard { width: 250px; bookmarked: false; progress: 100; thumbnail: @image-url("mock-thumbnail.svg"); item: { id: "44", title: "Finished broadcast", channel: "Another channel", duration: "45:00", initials: "AC", tone: #2a6b50 }; }
+        }
+    }
+}

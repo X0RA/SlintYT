@@ -1,0 +1,59 @@
+import { Theme } from "../theme.slint";
+import { AppState } from "../state.slint";
+import { Choice } from "choice.slint";
+component Segment inherits Rectangle {
+    in property <string> text;
+    in property <string> count;
+    in property <bool> checked;
+    callback selected();
+    width: content.preferred-width; height: 36px; border-radius: 18px;
+    background: root.checked ? Theme.accent : touch.has-hover ? Theme.hover : transparent;
+    accessible-role: tab; accessible-label: root.text; accessible-value: root.count; accessible-checked: root.checked;
+    accessible-action-default => { root.selected(); }
+    animate background { duration: 120ms; }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.selected(); } }
+    content := HorizontalLayout {
+        padding-left: 18px; padding-right: 18px; spacing: 6px;
+        Text { text: root.text; color: root.checked ? white : Theme.text; font-size: 13px; font-weight: 600; vertical-alignment: center; }
+        if root.count != "" : Text { text: root.count; color: root.checked ? #ffffffcc : Theme.subtle; font-size: 12px; vertical-alignment: center; }
+    }
+}
+// Under the Twitch search bar once a search has run: which results to show,
+// how to sort them, and how long videos should be.
+export component TwitchFilterBar inherits FlexboxLayout {
+    callback changed();
+    // Channels list by relevance, followers or name, videos by relevance,
+    // views, date or length.
+    private property <bool> channels: AppState.twitch-results-tab == 1;
+    function select(tab: int) {
+        if AppState.twitch-results-tab == tab { return; }
+        AppState.twitch-results-tab = tab;
+        AppState.twitch-sort = 0;
+        root.changed();
+    }
+    spacing: 14px; alignment: start; cross-axis-alignment: center;
+    Rectangle {
+        width: tabs.preferred-width; height: 46px; border-radius: 23px; border-width: 1px; border-color: Theme.border; background: #1a1a1e;
+        tabs := HorizontalLayout { padding: 4px; spacing: 2px;
+            twitch-tab-all := Segment { text: "All"; checked: AppState.twitch-results-tab == 0; selected => { root.select(0); } }
+            twitch-tab-channels := Segment { text: "Channels"; count: AppState.twitch-channel-total > 0 ? AppState.twitch-channel-total : ""; checked: root.channels; selected => { root.select(1); } }
+            twitch-tab-videos := Segment { text: "Videos"; count: AppState.twitch-video-total > 0 ? AppState.twitch-video-total : ""; checked: AppState.twitch-results-tab == 2; selected => { root.select(2); } }
+        }
+    }
+    HorizontalLayout { spacing: 8px; cross-axis-alignment: center;
+        Text { text: "Sort"; color: Theme.subtle; font-size: 13px; vertical-alignment: center; }
+        twitch-sort := Choice {
+            options: root.channels ? ["Relevance", "Most followers", "Name"] : ["Relevance", "Most viewed", "Newest", "Longest"];
+            label: "Sort results"; current-index <=> AppState.twitch-sort;
+            selected => { root.changed(); }
+        }
+    }
+    if !root.channels : HorizontalLayout { spacing: 8px; cross-axis-alignment: center;
+        Text { text: "Length"; color: Theme.subtle; font-size: 13px; vertical-alignment: center; }
+        twitch-length := Choice {
+            options: ["Any", "Under 30 min", "30 min – 2 h", "Over 2 h"];
+            label: "Video length"; current-index <=> AppState.twitch-length;
+            selected => { root.changed(); }
+        }
+    }
+}

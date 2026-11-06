@@ -1,0 +1,34 @@
+import { Theme } from "../theme.slint";
+import { AppState, TwitchResult } from "../state.slint";
+import { Avatar } from "avatar.slint";
+import { ActionButton } from "action-button.slint";
+// A Twitch channel in a grid, with a button to follow it on this computer.
+export component TwitchChannelCard inherits Rectangle {
+    in property <TwitchResult> item;
+    // A mock value for previews. The app reads it from the local library.
+    in property <bool> following: AppState.twitch-following(root.item.id, AppState.twitch-library-epoch);
+    callback activate();
+    callback follow-toggle();
+    follow-toggle => { AppState.twitch-toggle-follow(root.item); }
+    height: 76px;
+    border-radius: 12px; border-width: 1px; border-color: touch.has-hover ? #44444e : Theme.border;
+    background: touch.has-hover ? Theme.hover : Theme.card;
+    accessible-role: button; accessible-label: root.item.title; accessible-description: root.item.stats;
+    accessible-action-default => { root.activate(); }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.activate(); } }
+    HorizontalLayout {
+        padding-left: 12px; padding-right: 12px; spacing: 12px;
+        Avatar { width: 44px; height: 44px; y: (parent.height - self.height) / 2; initials: root.item.initials; tone: root.item.tone; url: root.item.picture; accessible-role: none; }
+        VerticalLayout { alignment: center; spacing: 2px; horizontal-stretch: 1;
+            Text { text: root.item.title; color: Theme.text; font-size: 14px; font-weight: 600; overflow: elide; }
+            Text { text: root.item.stats; color: Theme.subtle; font-size: 11px; overflow: elide; }
+            if root.item.metadata != "" : Text { text: root.item.metadata; color: Theme.muted; font-size: 11px; overflow: elide; }
+        }
+        twitch-follow := ActionButton {
+            height: 32px; y: (parent.height - self.height) / 2; text: root.following ? "Following" : "Follow";
+            primary: !root.following; outlined: root.following;
+            tip: root.following ? "Unfollow " + root.item.title : "Follow " + root.item.title + " on this computer";
+            clicked => { root.follow-toggle(); }
+        }
+    }
+}

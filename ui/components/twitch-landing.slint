@@ -1,0 +1,82 @@
+import { Theme } from "../theme.slint";
+import { AppState, TwitchFollow } from "../state.slint";
+import { Avatar } from "avatar.slint";
+import { TwitchVideoCard } from "twitch-video-card.slint";
+// Small text button for the right of a section heading, e.g. "See all".
+export component HeadingLink inherits Rectangle {
+    in property <string> text;
+    callback clicked();
+    width: label.preferred-width; height: 28px;
+    accessible-role: button; accessible-label: root.text; accessible-action-default => { root.clicked(); }
+    label := Text { text: root.text; color: touch.has-hover ? Theme.text : Theme.muted; font-size: 12px; font-weight: 500; vertical-alignment: center; }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+// A section title with an optional count after it, e.g. "Videos  240 results".
+export component SectionHeading inherits HorizontalLayout {
+    in property <string> text;
+    in property <string> count;
+    spacing: 10px; horizontal-stretch: 1;
+    Text { text: root.text; color: Theme.text; font-size: 16px; font-weight: 600; vertical-alignment: center; horizontal-stretch: 0; }
+    if root.count != "" : Text { text: root.count; color: Theme.subtle; font-size: 12px; vertical-alignment: center; }
+    Rectangle { horizontal-stretch: 1; }
+}
+component FollowCard inherits Rectangle {
+    in property <TwitchFollow> item;
+    callback activate();
+    height: 56px;
+    border-radius: 10px; border-width: 1px; border-color: touch.has-hover ? #44444e : Theme.border;
+    background: touch.has-hover ? Theme.hover : Theme.card;
+    accessible-role: button; accessible-label: root.item.name; accessible-description: root.item.status; accessible-action-default => { root.activate(); }
+    touch := TouchArea { mouse-cursor: pointer; clicked => { root.activate(); } }
+    HorizontalLayout {
+        padding-left: 10px; padding-right: 10px; spacing: 10px;
+        Avatar { width: 34px; height: 34px; y: (parent.height - self.height) / 2; initials: root.item.initials; tone: root.item.tone; url: root.item.picture; accessible-role: none; }
+        VerticalLayout { alignment: center; spacing: 2px;
+            Text { text: root.item.name; color: Theme.text; font-size: 13px; font-weight: 600; overflow: elide; }
+            if root.item.status != "" : Text { text: root.item.status; color: root.item.fresh ? Theme.accent : Theme.subtle; font-size: 11px; overflow: elide; }
+        }
+    }
+}
+// Shown on the Twitch page with no search: followed channels, then bookmarked
+// videos. Both are kept on this computer.
+export component TwitchLanding inherits Rectangle {
+    in property <length> card-width: 220px;
+    in property <length> gap: 12px;
+    private property <int> follow-columns: max(1, floor((root.width + root.gap) / (230px + root.gap)));
+    private property <length> follow-width: (root.width - root.gap * (root.follow-columns - 1)) / root.follow-columns;
+    height: layout.preferred-height;
+    layout := VerticalLayout {
+        spacing: 14px; alignment: start;
+        HorizontalLayout {
+            SectionHeading { text: "Following"; }
+            if AppState.twitch-following-total > AppState.twitch-following-list.length || AppState.twitch-following-all : twitch-following-more := HeadingLink {
+                text: AppState.twitch-following-all ? "Show less" : "See all " + AppState.twitch-following-total;
+                clicked => { AppState.twitch-following-all = !AppState.twitch-following-all; AppState.twitch-landing-refresh(); }
+            }
+        }
+        if AppState.twitch-following-list.length == 0 : Text {
+            text: "Channels you follow show up here, with how many new videos they've posted since you last looked. Follow a channel from search or its page.";
+            color: Theme.subtle; font-size: 13px; wrap: word-wrap;
+        }
+        if AppState.twitch-following-list.length > 0 : FlexboxLayout {
+            spacing: root.gap;
+            for item in AppState.twitch-following-list : twitch-follow-card := FollowCard {
+                width: root.follow-width; item: item;
+                activate => { AppState.twitch-open-user({ id: item.login, title: item.name, subtitle: "@" + item.login, picture: item.picture, initials: item.initials, tone: item.tone }); }
+            }
+        }
+        Rectangle { height: 14px; }
+        SectionHeading { text: "Bookmarks"; count: AppState.twitch-bookmarks.length > 0 ? AppState.twitch-bookmarks.length + (AppState.twitch-bookmarks.length == 1 ? " video" : " videos") : ""; }
+        if AppState.twitch-bookmarks.length == 0 : Text {
+            text: "Videos you bookmark show up here. Hover over a video and press the bookmark button, or use the one on the player.";
+            color: Theme.subtle; font-size: 13px; wrap: word-wrap;
+        }
+        if AppState.twitch-bookmarks.length > 0 : FlexboxLayout {
+            spacing: root.gap;
+            for item in AppState.twitch-bookmarks : twitch-bookmark-card := TwitchVideoCard {
+                width: root.card-width; item: item;
+                activate => { AppState.twitch-play(item.id, item.title, item.channel); }
+            }
+        }
+    }
+}

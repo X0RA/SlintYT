@@ -11,7 +11,13 @@ export struct FeedSection { label: string, detail: string, start: int, count: in
 export struct CommentData { id: string, author: string, author-id: string, initials: string, avatar: string, text: string, metadata: string, likes: string, replies: int, token: string, indent: int, expanded: bool, liked: bool, can-like: bool }
 export struct Breadcrumb { id: string, title: string, position: float, playlist-index: int }
 export struct LinkData { title: string, url: string }
-export struct TwitchResult { id: string, title: string, subtitle: string, metadata: string, duration: string, picture: string, initials: string, tone: color }
+// Videos also carry their channel, "268 views · 1 day ago", game and kind
+// ("Highlight", when known), plus the channel's avatar. Channels use `stats`
+// for their follower count.
+export struct TwitchResult { id: string, title: string, subtitle: string, metadata: string, duration: string, picture: string, initials: string, tone: color, channel: string, stats: string, game: string, kind: string, avatar: string }
+export struct TwitchRecent { query: string }
+// `status` reads "2 new videos" or "Up to date", and `fresh` is set when there are new ones.
+export struct TwitchFollow { login: string, name: string, picture: string, initials: string, tone: color, status: string, fresh: bool }
 
 export global AppState {
     pure callback format-comment(string) -> styled-text;
@@ -117,31 +123,59 @@ export global AppState {
     in-out property <bool> twitch-open: false;
     callback set-twitch-enabled(bool);
     in-out property <string> twitch-search-text;
-    // 0 searches videos, 1 searches users, 2 lists local bookmarks.
-    in-out property <int> twitch-search-mode: 0;
     // Bookmarks and watch progress are kept on this computer. The epoch
-    // changes whenever either does, so rows refresh.
+    // changes whenever either does, or a follow, so rows refresh.
     in-out property <int> twitch-library-epoch: 0;
     pure callback twitch-bookmarked(string, int) -> bool;
     // Percent watched, or 0.
     pure callback twitch-progress(string, int) -> float;
     callback twitch-toggle-bookmark(string);
+    // Followed channels are kept locally too, by login.
+    pure callback twitch-following(string, int) -> bool;
+    // Uses the item's id as the login, its title as the name and its picture.
+    callback twitch-toggle-follow(TwitchResult);
+    // The page shown with no search: followed channels, then bookmarked
+    // videos. Following shows a few until "See all" is pressed.
+    in-out property <[TwitchFollow]> twitch-following-list;
+    in-out property <int> twitch-following-total: 0;
+    in-out property <bool> twitch-following-all: false;
     in-out property <[TwitchResult]> twitch-bookmarks;
-    callback twitch-bookmarks-changed();
-    in-out property <[TwitchResult]> twitch-results;
-    // What's on screen, which stays put while the search text and radio change.
+    callback twitch-landing-refresh();
+    callback twitch-recent-refresh();
+    // Recent searches, matching what's typed, for the search bar's dropdown.
+    in-out property <[TwitchRecent]> twitch-recent;
+    callback twitch-recent-remove(string);
+    callback twitch-recent-clear();
+    // Drops the results, which brings back the page above.
+    callback twitch-clear-search();
+    // One search finds channels and videos together. The tab picks which to
+    // show: 0 is both, 1 channels and 2 videos.
     in-out property <string> twitch-results-query;
-    in-out property <int> twitch-results-mode: 0;
+    in-out property <int> twitch-results-tab: 0;
+    in-out property <[TwitchResult]> twitch-results;
+    in-out property <[TwitchResult]> twitch-channels;
+    in-out property <int> twitch-video-total: 0;
+    in-out property <int> twitch-channel-total: 0;
     in-out property <string> twitch-cursor;
+    in-out property <string> twitch-channel-cursor;
     in-out property <bool> twitch-busy: false;
+    in-out property <bool> twitch-channels-busy: false;
     in-out property <string> twitch-error;
+    in-out property <string> twitch-channels-error;
+    // Videos sort by relevance, views, newest or length; channels by relevance,
+    // followers or name. Length is any, under 30 min, 30 min to 2 h, or over.
     in-out property <int> twitch-sort: 0;
+    in-out property <int> twitch-length: 0;
+    // How many cards fit across, so both tab shows two rows of channels.
+    in-out property <int> twitch-columns: 4;
     callback twitch-search(string);
     callback twitch-load-more();
+    callback twitch-load-more-channels();
     callback twitch-sort-changed();
     callback twitch-play(string, string, string);
     in-out property <bool> player-twitch: false;
     // The user page. Its tab follows Past broadcasts, Highlights, Uploads.
+    in-out property <bool> twitch-user-following: false;
     in-out property <bool> twitch-user-open: false;
     in-out property <string> twitch-user-login;
     in-out property <string> twitch-user-name;

@@ -1,0 +1,5 @@
+import { TwitchRecentMenu } from "../components/twitch-recent-menu.slint";
+import { AppState } from "../state.slint";
+import { Button } from "std-widgets.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData, TwitchResult, TwitchRecent, TwitchFollow } from "../state.slint";
+export component AppWindow inherits Window { title: "twitch-recent-menu preview"; preferred-width: 820px; height: 450px; background: #0e0e10; init => { AppState.twitch-recent = [{ query: "speedrun" }, { query: "A very long recent search for an archived broadcast" }]; AppState.twitch-video-total = 420; AppState.twitch-channel-total = 120; } VerticalLayout { padding: 24px; spacing: 16px; TwitchRecentMenu { picked(query) => { AppState.twitch-search-text = query; } } Rectangle { vertical-stretch: 1; } Button { text: "Empty"; clicked => { AppState.twitch-recent = []; AppState.twitch-video-total = 0; AppState.twitch-channel-total = 0; } } } }

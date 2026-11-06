@@ -1,0 +1,28 @@
+import { AppState, TwitchResult } from "../state.slint";
+import { VideoCard } from "video-card.slint";
+// Share the YouTube card's layout, with local Twitch bookmarks and progress.
+export component TwitchVideoCard inherits Rectangle {
+    in property <TwitchResult> item;
+    in property <bool> bookmarked: AppState.twitch-bookmarked(root.item.id, AppState.twitch-library-epoch);
+    in property <float> progress: AppState.twitch-progress(root.item.id, AppState.twitch-library-epoch);
+    in property <image> thumbnail: AppState.avatar-image(root.item.picture, AppState.avatar-epoch);
+    callback activate();
+    callback bookmark-toggle();
+    bookmark-toggle => { AppState.twitch-toggle-bookmark(root.item.id); }
+    height: root.width * 9 / 16 + 39px;
+    VideoCard {
+        video: {
+            id: root.item.id, title: root.item.title, channel: root.item.channel,
+            metadata: root.item.stats + (root.item.game != "" ? " · " + root.item.game : ""),
+            duration: root.item.duration, thumbnail: root.thumbnail,
+            initials: root.item.initials, tone: root.item.tone, avatar: root.item.avatar,
+            watch-progress: round(root.progress),
+        };
+        channel-links: false;
+        bookmarks-available: true;
+        bookmark-collection: "your Twitch bookmarks";
+        bookmark-membership: root.bookmarked ? 2 : 1;
+        bookmark-toggle(id) => { root.bookmark-toggle(); }
+        play-video(id, title) => { root.activate(); }
+    }
+}

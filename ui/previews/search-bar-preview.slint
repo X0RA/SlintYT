@@ -17,5 +17,8 @@ export component AppWindow inherits Window {
         AppState.comments = [{id:"mock",author:"@viewer",initials:"V",text:"A thoughtful comment with enough text to test wrapping across the available width.",metadata:"2 hours ago",likes:"42",replies:3}];
         AppState.recommendations = [{id:"abcdefghijk",title:"A recommended video",channel:"Workshop",initials:"W",metadata:"12K views · 1 day ago",duration:"12:34",thumbnail:@image-url("mock-thumbnail.svg")}];
     }
-    HorizontalLayout { padding: 24px; alignment: center; SearchBar {} }
+    VerticalLayout { padding: 24px; alignment: center; spacing: 12px;
+        search := SearchBar {}
+        Text { text: search.focused ? "Search focused" : "Search inactive"; color: #8a8a93; }
+    }
 }

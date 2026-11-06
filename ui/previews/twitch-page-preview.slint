@@ -1,32 +1,28 @@
 import { TwitchPage } from "../views/twitch-page.slint";
 import { AppState } from "../state.slint";
 import { Button } from "std-widgets.slint";
-export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData, TwitchResult } from "../state.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData, TwitchResult, TwitchRecent, TwitchFollow } from "../state.slint";
 export component AppWindow inherits Window {
-    title: "Twitch page preview";
-    preferred-width: 900px; height: 600px; min-width: 400px; background: #0e0e10;
-    function clear() { AppState.twitch-busy = false; AppState.twitch-error = ""; AppState.twitch-results = []; AppState.twitch-cursor = ""; AppState.twitch-results-query = "speedrun"; }
-    init => { AppState.twitch-search-text = "speedrun"; }
+    title: "Twitch page preview"; preferred-width: 1000px; height: 760px; background: #0e0e10;
+    function clear() { AppState.twitch-user-open = false; AppState.twitch-busy = false; AppState.twitch-channels-busy = false; AppState.twitch-error = ""; AppState.twitch-channels-error = ""; AppState.twitch-results-tab = 0; AppState.twitch-video-total = 0; AppState.twitch-channel-total = 0; AppState.twitch-results = []; AppState.twitch-channels = []; AppState.twitch-results-query = "speedrun"; }
+    function full() {
+        root.clear(); AppState.twitch-search-text = "speedrun";
+        AppState.twitch-results = [{ id: "42", title: "A very long broadcast title with world record attempts and more", channel: "GamesDoneQuick", stats: "12.5K views · 2 days ago", game: "Celeste", duration: "1:50:31", initials: "GD", tone: #4b3ab3 },{ id: "42", title: "A very long broadcast title with world record attempts and more", channel: "GamesDoneQuick", stats: "12.5K views · 2 days ago", game: "Celeste", duration: "1:50:31", initials: "GD", tone: #4b3ab3 },{ id: "42", title: "A very long broadcast title with world record attempts and more", channel: "GamesDoneQuick", stats: "12.5K views · 2 days ago", game: "Celeste", duration: "1:50:31", initials: "GD", tone: #4b3ab3 },{ id: "42", title: "A very long broadcast title with world record attempts and more", channel: "GamesDoneQuick", stats: "12.5K views · 2 days ago", game: "Celeste", duration: "1:50:31", initials: "GD", tone: #4b3ab3 },{ id: "42", title: "A very long broadcast title with world record attempts and more", channel: "GamesDoneQuick", stats: "12.5K views · 2 days ago", game: "Celeste", duration: "1:50:31", initials: "GD", tone: #4b3ab3 },{ id: "42", title: "A very long broadcast title with world record attempts and more", channel: "GamesDoneQuick", stats: "12.5K views · 2 days ago", game: "Celeste", duration: "1:50:31", initials: "GD", tone: #4b3ab3 },{ id: "42", title: "A very long broadcast title with world record attempts and more", channel: "GamesDoneQuick", stats: "12.5K views · 2 days ago", game: "Celeste", duration: "1:50:31", initials: "GD", tone: #4b3ab3 },{ id: "42", title: "A very long broadcast title with world record attempts and more", channel: "GamesDoneQuick", stats: "12.5K views · 2 days ago", game: "Celeste", duration: "1:50:31", initials: "GD", tone: #4b3ab3 },{ id: "42", title: "A very long broadcast title with world record attempts and more", channel: "GamesDoneQuick", stats: "12.5K views · 2 days ago", game: "Celeste", duration: "1:50:31", initials: "GD", tone: #4b3ab3 }];
+        AppState.twitch-channels = [{ id: "runner", title: "A channel with a long display name", stats: "2.1M followers", metadata: "Speedruns and more", initials: "RU", tone: #4b3ab3 },{ id: "runner", title: "A channel with a long display name", stats: "2.1M followers", metadata: "Speedruns and more", initials: "RU", tone: #4b3ab3 },{ id: "runner", title: "A channel with a long display name", stats: "2.1M followers", metadata: "Speedruns and more", initials: "RU", tone: #4b3ab3 },{ id: "runner", title: "A channel with a long display name", stats: "2.1M followers", metadata: "Speedruns and more", initials: "RU", tone: #4b3ab3 },{ id: "runner", title: "A channel with a long display name", stats: "2.1M followers", metadata: "Speedruns and more", initials: "RU", tone: #4b3ab3 },{ id: "runner", title: "A channel with a long display name", stats: "2.1M followers", metadata: "Speedruns and more", initials: "RU", tone: #4b3ab3 },{ id: "runner", title: "A channel with a long display name", stats: "2.1M followers", metadata: "Speedruns and more", initials: "RU", tone: #4b3ab3 },{ id: "runner", title: "A channel with a long display name", stats: "2.1M followers", metadata: "Speedruns and more", initials: "RU", tone: #4b3ab3 },{ id: "runner", title: "A channel with a long display name", stats: "2.1M followers", metadata: "Speedruns and more", initials: "RU", tone: #4b3ab3 },{ id: "runner", title: "A channel with a long display name", stats: "2.1M followers", metadata: "Speedruns and more", initials: "RU", tone: #4b3ab3 },{ id: "runner", title: "A channel with a long display name", stats: "2.1M followers", metadata: "Speedruns and more", initials: "RU", tone: #4b3ab3 },{ id: "runner", title: "A channel with a long display name", stats: "2.1M followers", metadata: "Speedruns and more", initials: "RU", tone: #4b3ab3 }];
+        AppState.twitch-channel-total = 120; AppState.twitch-video-total = 460;
+        AppState.twitch-bookmarks = [{ id: "42", title: "A very long broadcast title with world record attempts and more", channel: "GamesDoneQuick", stats: "12.5K views · 2 days ago", game: "Celeste", duration: "1:50:31", initials: "GD", tone: #4b3ab3 }];
+        AppState.twitch-following-list = [{ login: "runner", name: "Runner", initials: "RU", status: "4 new videos", fresh: true }];
+        AppState.twitch-recent = [{ query: "speedrun" }, { query: "a long recent search for a particular broadcast" }];
+    }
+    init => { root.full(); }
     VerticalLayout {
         TwitchPage { vertical-stretch: 1; }
-        HorizontalLayout { height: 44px; spacing: 8px; padding: 4px;
-            Button { text: "Idle"; clicked => { root.clear(); AppState.twitch-results-query = ""; } }
-            Button { text: "Loading"; clicked => { root.clear(); AppState.twitch-busy = true; } }
-            Button { text: "No results"; clicked => { root.clear(); } }
-            Button { text: "Error"; clicked => { root.clear(); AppState.twitch-error = "Twitch search is unavailable right now. Its API changed and no updated query list is published yet."; } }
-            Button { text: "Videos"; clicked => { root.clear(); AppState.twitch-results-mode = 0; AppState.twitch-search-mode = 0; AppState.twitch-results = [
-                { title: "Any% world record attempts", subtitle: "GamesDoneQuick", metadata: "Celeste · 12.5K views · 2026-11-04", duration: "1:50:31" },
-                { title: "A very long video title that should elide because it does not fit inside the available width of this row at all", subtitle: "Runner", metadata: "1 view · 2026-01-02", duration: "12:04" },
-            ]; } }
-            Button { text: "Bookmarks"; clicked => { root.clear(); AppState.twitch-search-text = ""; AppState.twitch-search-mode = 2; AppState.twitch-bookmarks = [
-                { id: "2", title: "Half watched and bookmarked", subtitle: "Runner", metadata: "Celeste · 980 views · 2026-11-01", duration: "5:49:48" },
-                { id: "4", title: "Another saved broadcast", subtitle: "GamesDoneQuick", metadata: "Just Chatting · 12K views · 2026-10-02", duration: "8:12:00" },
-            ]; } }
-            Button { text: "No bookmarks"; clicked => { root.clear(); AppState.twitch-search-text = ""; AppState.twitch-search-mode = 2; AppState.twitch-bookmarks = []; } }
-            Button { text: "Users"; clicked => { root.clear(); AppState.twitch-results-mode = 1; AppState.twitch-search-mode = 1; AppState.twitch-results = [
-                { title: "GamesDoneQuick", subtitle: "@gamesdonequick · 2.1M followers", metadata: "Replay of the marathon", initials: "GD", tone: #3b4a63 },
-                { title: "quietstreamer", subtitle: "@quietstreamer · 1 follower", initials: "QS", tone: #4a3a3a },
-            ]; } }
+        HorizontalLayout { height: 40px;
+            Button { text: "Results"; clicked => { root.full(); } }
+            Button { text: "Landing"; clicked => { root.full(); AppState.twitch-results-query = ""; AppState.twitch-search-text = ""; } }
+            Button { text: "Empty"; clicked => { root.clear(); } }
+            Button { text: "Loading"; clicked => { root.clear(); AppState.twitch-busy = true; AppState.twitch-channels-busy = true; } }
+            Button { text: "Error"; clicked => { root.clear(); AppState.twitch-error = "Twitch search is unavailable. Try again."; } }
         }
     }
 }

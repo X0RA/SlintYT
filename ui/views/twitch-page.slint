@@ -1,84 +1,92 @@
 import { ScrollView, Spinner } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
 import { AppState } from "../state.slint";
-import { Choice } from "../components/choice.slint";
-import { PillRadio } from "../components/pill-radio.slint";
 import { SearchBar } from "../components/search-bar.slint";
-import { TwitchResultRow } from "../components/twitch-result-row.slint";
+import { TwitchLanding, SectionHeading, HeadingLink } from "../components/twitch-landing.slint";
+import { TwitchChannelCard } from "../components/twitch-channel-card.slint";
+import { TwitchVideoCard } from "../components/twitch-video-card.slint";
+import { TwitchRecentMenu } from "../components/twitch-recent-menu.slint";
+import { TwitchFilterBar } from "../components/twitch-filter-bar.slint";
 import { TwitchUserPage } from "twitch-user-page.slint";
 component TwitchSearch inherits Rectangle {
-    private property <bool> narrow: root.width < 700px;
-    // Bookmarks are local, so the search bar filters them instead of searching.
-    private property <bool> bookmarks: AppState.twitch-search-mode == 2;
-    private property <bool> empty: root.bookmarks ? AppState.twitch-bookmarks.length == 0 : AppState.twitch-results.length == 0;
+    private property <bool> landing: AppState.twitch-results-query == "";
     private property <string> text: AppState.twitch-search-text;
-    changed text => { if root.bookmarks { AppState.twitch-bookmarks-changed(); } }
-    init => { if root.bookmarks { AppState.twitch-bookmarks-changed(); } }
+    private property <int> columns: max(1, floor((root.width - 24px + 12px) / 252px));
+    private property <length> card-width: (results.visible-width - 24px - (root.columns - 1) * 12px) / root.columns;
+    changed columns => { AppState.twitch-columns = root.columns; }
+    changed text => {
+        AppState.twitch-recent-refresh();
+        if root.text == "" && !root.landing { AppState.twitch-clear-search(); }
+    }
+    init => { AppState.twitch-columns = root.columns; AppState.twitch-landing-refresh(); }
     function search(query: string) {
+        if query == "" { return; }
+        twitch-search.blur();
+        AppState.twitch-search-text = query;
         results.content-y = 0px;
-        if root.bookmarks { AppState.twitch-bookmarks-changed(); } else { AppState.twitch-search(query); }
+        AppState.twitch-search(query);
     }
-    // Switching the mode re-runs a search that's already on screen.
-    function select-mode(mode: int) {
-        if AppState.twitch-search-mode == mode { return; }
-        AppState.twitch-search-mode = mode;
-        AppState.twitch-sort = 0;
-        results.content-y = 0px;
-        if mode == 2 { AppState.twitch-bookmarks-changed(); }
-        else if AppState.twitch-results-query != "" { root.search(AppState.twitch-search-text); }
-    }
-    // More results load as the page nears its end, the same way the feeds do.
     Timer {
         interval: 250ms;
-        running: !root.bookmarks && AppState.twitch-cursor != "" && !AppState.twitch-busy && AppState.twitch-error == ""
+        running: !root.landing && !AppState.twitch-busy && !AppState.twitch-channels-busy
             && -results.content-y + results.visible-height >= results.content-height - 900px;
-        triggered => { AppState.twitch-load-more(); }
+        triggered => {
+            if AppState.twitch-results-tab != 1 && AppState.twitch-error == "" && AppState.twitch-cursor != "" { AppState.twitch-load-more(); }
+            if AppState.twitch-results-tab == 1 && AppState.twitch-channels-error == "" && AppState.twitch-channel-cursor != "" { AppState.twitch-load-more-channels(); }
+        }
     }
     VerticalLayout { padding-top: 24px; spacing: 16px;
-        HorizontalLayout { height: 48px; alignment: center; spacing: 12px;
-            twitch-search := SearchBar { width: min(600px, max(100px, root.width - 340px)); placeholder: root.bookmarks ? "Search bookmarks" : "Search Twitch"; text <=> AppState.twitch-search-text; submitted(query) => { root.search(query); } }
-            twitch-video := PillRadio { label: "Video"; checked: AppState.twitch-search-mode == 0; selected => { root.select-mode(0); } }
-            twitch-user := PillRadio { label: "User"; checked: AppState.twitch-search-mode == 1; selected => { root.select-mode(1); } }
-            twitch-bookmarks := PillRadio { label: "Bookmarks"; checked: root.bookmarks; selected => { root.select-mode(2); } }
+        HorizontalLayout { height: 48px; alignment: center;
+            twitch-search := SearchBar { width: min(600px, root.width - 24px); placeholder: "Search Twitch"; text <=> AppState.twitch-search-text; submitted(query) => { root.search(query); } }
         }
-        if root.bookmarks || AppState.twitch-results-query != "" : HorizontalLayout { alignment: start;
-            twitch-sort := Choice {
-                options: root.bookmarks ? ["Recently added", "Recently watched", "Channel"] : AppState.twitch-search-mode == 1 ? ["Relevance", "Most followers", "Name"] : ["Relevance", "Most viewed", "Newest", "Longest"];
-                label: "Sort results"; current-index <=> AppState.twitch-sort;
-                selected => { results.content-y = 0px; AppState.twitch-sort-changed(); }
-            }
-        }
+        if !root.landing : TwitchFilterBar { changed => { results.content-y = 0px; AppState.twitch-sort-changed(); } }
         results := ScrollView {
-            vertical-stretch: 1;
-            horizontal-scrollbar-policy: always-off;
+            vertical-stretch: 1; horizontal-scrollbar-policy: always-off;
             VerticalLayout {
-                width: results.visible-width;
-                padding-bottom: 32px; spacing: 0px; alignment: start;
-                if !root.bookmarks : VerticalLayout {
-                    for item in AppState.twitch-results : TwitchResultRow {
-                        item: item; user: AppState.twitch-results-mode == 1; narrow: root.narrow;
-                        activate => {
-                            if AppState.twitch-results-mode == 1 { AppState.twitch-open-user(item); }
-                            else { AppState.twitch-play(item.id, item.title, item.subtitle); }
+                width: results.visible-width; padding-left: 12px; padding-right: 12px;
+                padding-bottom: 32px; spacing: 16px; alignment: start;
+                if root.landing : TwitchLanding { card-width: root.card-width; }
+                if !root.landing && AppState.twitch-results-tab != 2 : VerticalLayout { spacing: 12px;
+                    HorizontalLayout {
+                        SectionHeading { text: "Channels"; count: AppState.twitch-channel-total > 0 ? AppState.twitch-channel-total + " results" : ""; }
+                        if AppState.twitch-results-tab == 0 && AppState.twitch-channels.length > root.columns * 2 : HeadingLink {
+                            text: "See all"; clicked => { AppState.twitch-results-tab = 1; AppState.twitch-sort = 0; AppState.twitch-sort-changed(); }
                         }
                     }
-                }
-                if root.bookmarks : VerticalLayout {
-                    for item in AppState.twitch-bookmarks : TwitchResultRow {
-                        item: item; narrow: root.narrow;
-                        activate => { AppState.twitch-play(item.id, item.title, item.subtitle); }
+                    FlexboxLayout { spacing: 12px;
+                        for item[index] in AppState.twitch-channels : Rectangle {
+                            visible: AppState.twitch-results-tab == 1 || index < root.columns * 2;
+                            width: self.visible ? root.card-width : 0px; height: self.visible ? 76px : 0px;
+                            TwitchChannelCard { item: item; activate => { twitch-search.blur(); AppState.twitch-open-user(item); } }
+                        }
                     }
+                    if AppState.twitch-channels-error != "" : Text { text: AppState.twitch-channels-error; color: #ffaaa5; font-size: 14px; wrap: word-wrap; }
+                    if AppState.twitch-channels-busy : Spinner { width: 24px; height: 24px; }
+                    if !AppState.twitch-channels-busy && AppState.twitch-channels-error == "" && AppState.twitch-channels.length == 0 : Text { text: "No channels found."; color: Theme.muted; font-size: 14px; }
                 }
-                if !root.bookmarks && AppState.twitch-error != "" : Text { text: AppState.twitch-error; color: #ffaaa5; font-size: 14px; wrap: word-wrap; horizontal-alignment: center; }
-                if !root.bookmarks && AppState.twitch-busy : HorizontalLayout { height: 64px; alignment: center; Spinner { width: 24px; height: 24px; } }
-                if root.empty && (root.bookmarks || (!AppState.twitch-busy && AppState.twitch-error == "")) : Text {
-                    height: 120px;
-                    text: root.bookmarks ? (AppState.twitch-search-text != "" ? "No matching bookmarks." : "No bookmarks yet. Hover over a video and press the bookmark button to keep it here.")
-                        : AppState.twitch-results-query == "" ? "Search for Twitch videos or users." : "No results for “" + AppState.twitch-results-query + "”.";
-                    color: Theme.muted; font-size: 15px; horizontal-alignment: center; vertical-alignment: center; wrap: word-wrap;
+                if !root.landing && AppState.twitch-results-tab != 1 : VerticalLayout { spacing: 12px;
+                    SectionHeading { text: "Videos"; count: AppState.twitch-video-total > 0 ? AppState.twitch-video-total + " results" : ""; }
+                    FlexboxLayout { spacing: 12px;
+                        for item in AppState.twitch-results : TwitchVideoCard {
+                            width: root.card-width; item: item;
+                            activate => { twitch-search.blur(); AppState.twitch-play(item.id, item.title, item.channel); }
+                        }
+                    }
+                    if AppState.twitch-busy : Spinner { width: 24px; height: 24px; }
+                    if !AppState.twitch-busy && AppState.twitch-error == "" && AppState.twitch-results.length == 0 : Text { text: AppState.twitch-length > 0 ? "No loaded videos match this length. More results load as you scroll." : "No videos found."; color: Theme.muted; font-size: 14px; wrap: word-wrap; }
                 }
+                if !root.landing && AppState.twitch-error != "" : Text { text: AppState.twitch-error; color: #ffaaa5; font-size: 14px; wrap: word-wrap; }
             }
         }
+    }
+    if twitch-search.focused && AppState.twitch-recent.length > 0 : twitch-recent-dismiss := TouchArea {
+        y: 78px; height: root.height - self.y; clicked => { twitch-search.blur(); }
+    }
+    // Last in the tree so suggestions float over the page content.
+    if twitch-search.focused && AppState.twitch-recent.length > 0 : TwitchRecentMenu {
+        x: twitch-search.absolute-position.x - root.absolute-position.x;
+        y: 78px; width: twitch-search.width;
+        picked(query) => { root.search(query); }
     }
 }
 export component TwitchPage inherits Rectangle {

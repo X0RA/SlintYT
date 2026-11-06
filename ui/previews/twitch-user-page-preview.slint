@@ -1,7 +1,7 @@
 import { TwitchUserPage } from "../views/twitch-user-page.slint";
 import { AppState } from "../state.slint";
 import { Button } from "std-widgets.slint";
-export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData, TwitchResult } from "../state.slint";
+export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData, TwitchResult, TwitchRecent, TwitchFollow } from "../state.slint";
 export component AppWindow inherits Window {
     title: "Twitch user page preview";
     preferred-width: 1000px; height: 720px; min-width: 460px; background: #0e0e10;
@@ -23,6 +23,8 @@ export component AppWindow inherits Window {
             Button { text: "Loading"; clicked => { root.clear(); AppState.twitch-user-busy = true; } }
             Button { text: "None"; clicked => { root.clear(); } }
             Button { text: "Error"; clicked => { root.clear(); AppState.twitch-user-error = "This Twitch user could not be found."; } }
+            // The app toggles this through twitch-toggle-follow.
+            Button { text: AppState.twitch-user-following ? "Unfollow" : "Follow"; clicked => { AppState.twitch-user-following = !AppState.twitch-user-following; } }
             Button { text: "Filter limit"; clicked => { root.videos(); AppState.twitch-user-filter = "marathon"; AppState.twitch-user-note = "Searched the 1000 most recently loaded videos."; } }
         }
     }

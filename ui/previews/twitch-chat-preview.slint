@@ -1,0 +1,41 @@
+import { Button } from "std-widgets.slint";
+import { TwitchChatOverlay } from "../components/twitch-chat-overlay.slint";
+import { TwitchChat } from "../components/twitch-chat.slint";
+import { AppState } from "../state.slint";
+export { AppState, ChatRow, ChatImage, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData, TwitchResult, TwitchRecent, TwitchFollow } from "../state.slint";
+export component AppWindow inherits Window {
+    title: "Twitch chat preview"; width: 480px; height: 700px;
+    function populate() {
+        AppState.chat-open = true;
+        AppState.chat-error = ""; AppState.chat-busy = false;
+        AppState.chat-rows = [
+            {id:"1",author:"SpeedRunner",color:#bf94ff,time:"0:01:02",text:"What a run! Kappa",badges:"moderator",emotes:[{label:"Kappa",url:"mock"}]},
+            {id:"2",author:"Viewer with a very long display name",color:#73daca,time:"0:01:03",text:"This is a longer message that wraps across several lines so we can check the layout in a narrow chat panel. Hello everyone 👋"},
+            {id:"3",author:"Unknown user",color:#bf94ff,time:"0:01:04",text:"A message from an unavailable account."},
+            {id:"4",author:"qawas_",color:#ec7676,time:"0:01:05",text:"!dles"},
+            {id:"5",author:"quite_adept",color:#4ade80,time:"0:01:06",text:"they forced me to eat sea urchin in Japan and I did not like it"},
+            {id:"6",author:"demujo",color:#69c9a0,time:"0:01:07",text:"just give them a sashimi plate"},
+            {id:"7",author:"tonton151",color:#ec7676,time:"0:01:08",text:"is this sushi balatro or sushi backpack battles"},
+            {id:"8",author:"minipooley",color:#c297e8,time:"0:01:09",text:"55"},
+            {id:"9",author:"HawkEset",color:#e8c85e,time:"0:01:10",text:"Can you just do sashimi instead?"},
+            {id:"10",author:"ketchirp",color:#7c91ff,time:"0:01:11",text:"whats uni taste like"}
+        ];
+    }
+    init => { root.populate(); AppState.chat-follow = true; }
+    VerticalLayout {
+        HorizontalLayout {
+            Button { text:"Messages"; clicked => { root.populate(); } }
+            Button { text:"Following"; clicked => { root.populate(); AppState.chat-follow = true; AppState.chat-has-earlier = true; } }
+            Button { text:"Reading"; clicked => { root.populate(); AppState.chat-follow = false; AppState.chat-has-earlier = true; } }
+            Button { text:"Loading earlier"; clicked => { root.populate(); AppState.chat-follow = false; AppState.chat-busy = true; } }
+            Button { text:"Loading"; clicked => { AppState.chat-rows = []; AppState.chat-busy = true; AppState.chat-error = ""; } }
+            Button { text:"Empty"; clicked => { AppState.chat-rows = []; AppState.chat-busy = false; AppState.chat-error = ""; } }
+            Button { text:"Error"; clicked => { AppState.chat-busy = false; AppState.chat-error = "Chat is unavailable. Try again shortly."; } }
+        }
+        Rectangle {
+            background: #eae7df;
+            if AppState.chat-open && !AppState.chat-floating : TwitchChat { preview: true; mock-image: @image-url("mock-thumbnail.svg"); }
+            if AppState.chat-open && AppState.chat-floating : TwitchChatOverlay { preview: true; mock-image: @image-url("mock-thumbnail.svg"); }
+        }
+    }
+}

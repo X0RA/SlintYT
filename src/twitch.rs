@@ -15,10 +15,12 @@ use std::{
 };
 use tokio::sync::Mutex;
 
+pub mod chat;
+
 const OPERATIONS_URL: &str = "https://raw.githubusercontent.com/DmitryScaletta/twitch-gql-queries/main/packages/typescript/src/generated/operations-all.generated.ts";
 const GQL_URL: &str = "https://gql.twitch.tv/gql";
-/// The public ID used by the twitch.tv website.
-const CLIENT_ID: &str = "kimne78kx3ncx6brgo4mv6wki5h1ko";
+/// Public client ID supporting both browsing and chat cursor queries.
+const CLIENT_ID: &str = "kd1unb4b3q4t58fwlpcbzcbnm76a8fp";
 const SEARCH_OPERATION: &str = "SearchResultsPage_SearchResults";
 const VIDEOS_OPERATION: &str = "FilterableVideoTower_Videos";
 const ABOUT_OPERATION: &str = "ChannelRoot_AboutPanel";
@@ -431,6 +433,13 @@ fn read_reply(reply: Value) -> Result<Option<Value>> {
         })
     }) {
         return Ok(None);
+    }
+    if errors.is_some_and(|errors| {
+        errors
+            .iter()
+            .any(|e| e["extensions"]["code"] == "IntegrityCheckFailed")
+    }) {
+        bail!("Twitch rejected the chat request (integrity check). Please retry later.");
     }
     if reply["data"].is_object() {
         return Ok(Some(reply["data"].clone()));

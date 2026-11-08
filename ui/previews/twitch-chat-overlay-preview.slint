@@ -1,0 +1,42 @@
+import { Button } from "std-widgets.slint";
+import { TwitchChatOverlay } from "../components/twitch-chat-overlay.slint";
+import { TwitchChat } from "../components/twitch-chat.slint";
+import { AppState } from "../state.slint";
+export { AppState, ChatRow, ChatImage, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData, TwitchResult, TwitchRecent, TwitchFollow } from "../state.slint";
+export component AppWindow inherits Window {
+    title: "Floating Twitch chat preview"; width: 960px; height: 700px;
+    function messages() {
+        AppState.chat-open = true; AppState.chat-floating = true; AppState.chat-follow = true;
+        AppState.chat-busy = false; AppState.chat-error = "";
+        AppState.chat-rows = [
+            {id:"1",author:"autobottelsa_",color:#e89759,text:"peanuts dot dle"},
+            {id:"2",author:"FoxyMoxy",color:#ec7676,text:"Cheeky time guess?",badge-images:[{label:"Subscriber",url:"mock"}]},
+            {id:"3",author:"hejratheblue",color:#6aabe0,text:"krillion"},
+            {id:"4",author:"pmacu7",color:#7c91ff,text:"do not judge a toe walker by their ability to make a rube goldberg machine or whatever"},
+            {id:"5",author:"Viljen",color:#e8c85e,text:"fishdle"},
+            {id:"6",author:"ethmicram",color:#69c9a0,text:"Bandle"},
+            {id:"7",author:"Axis_Otaku",color:#e18ca9,text:"Link preparing: Hi!"},
+            {id:"8",author:"ManicMethod13",color:#54d9ba,text:"Amountle"},
+            {id:"9",author:"AnExtremelyLongUsernameThatMustWrap",color:#c297e8,text:"Supercalifragilisticexpialidocious and a long message to check narrow widths."},
+            {id:"10",author:"Viewer",color:#86b9ef,text:"A literal <tag> and **stars** stay ordinary chat text."},
+            {id:"11",author:"Unknown user",color:#bdbdc5,text:"Hello everyone 👋"}
+        ];
+    }
+    init => { root.messages(); }
+    VerticalLayout {
+        HorizontalLayout {
+            Button { text: "Messages"; clicked => { root.messages(); } }
+            Button { text: "Reading"; clicked => { AppState.chat-follow = false; } }
+            Button { text: "Empty"; clicked => { AppState.chat-rows = []; } }
+            Button { text: "Loading"; clicked => { AppState.chat-busy = !AppState.chat-busy; } }
+            Button { text: "Error"; clicked => { AppState.chat-error = "Chat is temporarily unavailable."; } }
+            Button { text: "Narrow"; clicked => { AppState.chat-overlay-width = 160; } }
+        }
+        Rectangle {
+            background: #eae7df;
+            Image { width: parent.width; height: parent.height; source: @image-url("mock-thumbnail.svg"); image-fit: contain; }
+            if AppState.chat-open && AppState.chat-floating : TwitchChatOverlay { preview: true; mock-image: @image-url("mock-thumbnail.svg"); }
+            if AppState.chat-open && !AppState.chat-floating : TwitchChat { x: parent.width - self.width; width: 340px; height: parent.height; preview: true; mock-image: @image-url("mock-thumbnail.svg"); }
+        }
+    }
+}

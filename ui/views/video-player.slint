@@ -6,6 +6,8 @@ import { Icon } from "../components/icon.slint";
 import { MenuItem, MenuSurface } from "../components/menu-item.slint";
 import { Scrubber } from "../components/scrubber.slint";
 import { SeekPreview } from "../components/seek-preview.slint";
+import { TwitchChatOverlay } from "../components/twitch-chat-overlay.slint";
+import { TwitchChat } from "../components/twitch-chat.slint";
 import { VideoDetails } from "video-details.slint";
 
 // Round translucent button floating over the video.
@@ -78,7 +80,9 @@ export component VideoPlayer inherits Rectangle {
     private property <int> frame-dir: 0;
     private property <bool> frame-held: false;
     private property <bool> playable: !AppState.player-loading && AppState.player-error == "";
-    private property <bool> narrow: root.width < 700px;
+    private property <bool> chat-visible: AppState.player-twitch && AppState.chat-open && !AppState.player-pip;
+    private property <length> chat-width: root.chat-visible && !AppState.chat-floating ? min(340px, root.width * 0.45) : 0px;
+    private property <bool> narrow: root.width - root.chat-width < 700px;
     private property <bool> chrome: !AppState.player-fullscreen && !AppState.player-pip;
     // Keep the current video plus the one before it visible; earlier crumbs collapse into "…".
     private property <int> hidden-crumbs: max(0, AppState.breadcrumbs.length - (root.narrow ? 1 : 2));
@@ -111,14 +115,17 @@ export component VideoPlayer inherits Rectangle {
                 && -page.content-y + page.visible-height >= page.content-height - 900px;
             triggered => { AppState.load-comments(AppState.comments-newest, true); }
         }
+        if root.chat-visible && !AppState.chat-floating : TwitchChat { x: root.width - root.chat-width; width: root.chat-width; height: root.height; }
         page := ScrollView {
-            content-width: root.width;
+            x: 0px;
+            width: root.width - root.chat-width;
+            content-width: self.width;
             horizontal-scrollbar-policy: always-off;
             vertical-scrollbar-policy: AppState.player-fullscreen || AppState.player-pip ? always-off : as-needed;
             private property <int> reset: AppState.scroll-reset;
             changed reset => { self.content-y = 0px; root.menu = 0; root.show-controls(); }
             changed content-y => { root.menu = 0; AppState.dismiss-popovers += 1; }
-            VerticalLayout { spacing: 0px; min-width: 0px; width: root.width;
+            VerticalLayout { spacing: 0px; min-width: 0px; width: page.width;
                 picture := Rectangle {
                     height: root.height; background: black;
                     Image { width: parent.width; height: parent.height; source: AppState.player-texture; image-fit: contain; }
@@ -224,7 +231,7 @@ export component VideoPlayer inherits Rectangle {
                             HorizontalLayout { padding-top: 6px; spacing: 2px; cross-axis-alignment: center;
                                 toggle := ControlButton { icon: AppState.player-paused || AppState.player-ended ? "play" : "pause"; tip: AppState.player-paused ? "Play" : "Pause"; enabled: root.playable; clicked => { root.toggle(); } }
                                 if !AppState.player-twitch : ControlButton { icon: "next"; tip: "Next video"; clicked => { AppState.player-next(); } }
-                                ControlButton { icon: AppState.player-muted ? "mute" : "volume"; tip: AppState.player-muted ? "Unmute" : "Mute"; clicked => { AppState.player-toggle-mute(); } }
+                                if picture.width > 360px : ControlButton { icon: AppState.player-muted ? "mute" : "volume"; tip: AppState.player-muted ? "Unmute" : "Mute"; clicked => { AppState.player-toggle-mute(); } }
                                 if !root.narrow : Rectangle { width: 82px; height: 44px;
                                     Scrubber { x: 0px; width: 72px; label: "Volume"; maximum: 100; thickness: 3px; fill: white; knob-always: false;
                                         value: AppState.player-muted ? 0 : AppState.player-volume;
@@ -232,21 +239,22 @@ export component VideoPlayer inherits Rectangle {
                                         released(value) => { AppState.player-volume = value; root.volume-changed(value); }
                                     }
                                 }
-                                Rectangle { width: time.preferred-width + 8px; height: 44px;
+                                if picture.width > 540px : Rectangle { width: time.preferred-width + 8px; height: 44px;
                                     time := Text { x: 4px; text: root.clock(AppState.player-position) + " / " + (AppState.player-duration > 0 ? root.clock(AppState.player-duration) : "LIVE"); color: #e4e4e7; font-size: 13px; vertical-alignment: center; }
                                 }
                                 Rectangle { horizontal-stretch: 1; }
-                                if AppState.player-twitch : twitch-bookmark := ControlButton {
+                                if AppState.player-twitch && picture.width > 420px : twitch-bookmark := ControlButton {
                                     property <bool> saved: AppState.twitch-bookmarked(AppState.player-video-id, AppState.twitch-library-epoch);
                                     icon: self.saved ? "bookmark-filled" : "bookmark"; tip: self.saved ? "Remove bookmark" : "Bookmark video"; pressed-state: self.saved;
                                     clicked => { AppState.twitch-toggle-bookmark(AppState.player-video-id); }
                                 }
-                                ControlButton { text: AppState.player-speed + "×"; tip: "Playback speed"; active: root.menu == 1; clicked => { root.menu = root.menu == 1 ? 0 : 1; } }
-                                quality-control := ControlButton { text: AppState.player-current-quality != "" ? AppState.player-current-quality : AppState.player-loading ? "Loading…" : "Quality"; tip: AppState.player-current-quality != "" ? "Video quality · " + AppState.player-current-quality : "Video quality"; active: root.menu == 2; clicked => { root.menu = root.menu == 2 ? 0 : 2; } }
+                                if picture.width > 420px : ControlButton { text: AppState.player-speed + "×"; tip: "Playback speed"; active: root.menu == 1; clicked => { root.menu = root.menu == 1 ? 0 : 1; } }
+                                if picture.width > 540px : quality-control := ControlButton { text: AppState.player-current-quality != "" ? AppState.player-current-quality : AppState.player-loading ? "Loading…" : "Quality"; tip: AppState.player-current-quality != "" ? "Video quality · " + AppState.player-current-quality : "Video quality"; active: root.menu == 2; clicked => { root.menu = root.menu == 2 ? 0 : 2; } }
                                 if !AppState.player-twitch : subtitles := ControlButton { icon: "subtitles"; tip: AppState.player-subtitle-index > 0 ? "Turn subtitles off (right-click for languages)" : "Choose subtitles"; pressed-state: AppState.player-subtitle-index > 0; active: root.menu == 3;
                                     clicked => { root.subtitles(); }
                                     right-clicked => { root.menu = root.menu == 3 ? 0 : 3; }
                                 }
+                                if AppState.player-twitch && !AppState.player-pip : chat-toggle := ControlButton { icon: "chat-panel"; tip: AppState.chat-open ? "Hide chat" : "Show chat"; pressed-state: AppState.chat-open; clicked => { AppState.chat-open = !AppState.chat-open; } }
                                 fullscreen := ControlButton { icon: "fullscreen"; tip: "Fullscreen"; clicked => { root.toggle-fullscreen(); } }
                             }
                         }
@@ -302,6 +310,9 @@ export component VideoPlayer inherits Rectangle {
                 if !AppState.player-fullscreen && !AppState.player-pip && !AppState.player-twitch : VideoDetails {}
             }
         }
+        if root.chat-visible && AppState.chat-floating : TwitchChatOverlay {
+            x: 0px; y: 0px; width: root.width; height: root.height;
+        }
         key-pressed(event) => {
             let dir = root.frame-key(event.text);
             if dir == 0 || !root.playable { return reject; }
@@ -335,6 +346,6 @@ export component VideoPlayer inherits Rectangle {
         KeyBinding { keys: @keys(L); activated => { root.seek(AppState.player-position + 10); } }
         KeyBinding { keys: @keys(UpArrow); enabled: page.content-y >= -1px; activated => { root.volume-changed(min(100,AppState.player-volume + 5)); } }
         KeyBinding { keys: @keys(DownArrow); enabled: page.content-y >= -1px; activated => { root.volume-changed(max(0,AppState.player-volume - 5)); } }
-        KeyBinding { keys: @keys(Escape); activated => { if AppState.sync-menu-open { AppState.sync-menu-open = false; } else if root.menu != 0 { root.menu = 0; } else if AppState.player-sidebar-open { AppState.player-sidebar-open = false; } else if AppState.player-fullscreen { root.toggle-fullscreen(); } else if AppState.player-pip { AppState.player-toggle-pip(); } else { root.close(); } } }
+        KeyBinding { keys: @keys(Escape); activated => { if AppState.sync-menu-open { AppState.sync-menu-open = false; } else if root.menu != 0 { root.menu = 0; } else if AppState.player-sidebar-open { AppState.player-sidebar-open = false; } else if AppState.chat-open { AppState.chat-open = false; } else if AppState.player-fullscreen { root.toggle-fullscreen(); } else if AppState.player-pip { AppState.player-toggle-pip(); } else { root.close(); } } }
     }
 }

@@ -1,0 +1,201 @@
+import { ListView, Spinner } from "std-widgets.slint";
+import { AppState } from "../state.slint";
+import { Theme } from "../theme.slint";
+import { ActionButton } from "action-button.slint";
+import { Icon } from "icon.slint";
+
+// Small pill for chat navigation. Quiet pills sit inline, the others float over the list.
+component ChatPill inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    in property <bool> quiet: false;
+    in property <bool> floating: false;
+    callback clicked();
+    width: label.preferred-width + 22px; height: root.quiet ? 22px : 26px;
+    border-radius: self.height / 2;
+    background: touch.has-hover && root.enabled ? Theme.hover : root.quiet ? transparent : root.floating ? #141417e6 : Theme.raised;
+    border-width: root.quiet ? 0px : 1px; border-color: root.floating ? #ffffff26 : Theme.border;
+    drop-shadow-blur: root.quiet ? 0px : 8px; drop-shadow-offset-y: 2px; drop-shadow-color: #00000059;
+    opacity: root.enabled || !root.quiet ? 1 : 0.5;
+    accessible-role: button; accessible-label: root.text; accessible-enabled: root.enabled;
+    accessible-action-default => { if root.enabled { root.clicked(); } }
+    label := Text {
+        x: 11px; width: parent.width - 22px;
+        text: root.text; font-size: root.quiet ? 11px : 12px; font-weight: 500;
+        color: touch.has-hover && root.enabled ? Theme.strong : root.quiet ? Theme.muted : Theme.text;
+        vertical-alignment: center; horizontal-alignment: center;
+    }
+    touch := TouchArea { enabled: root.enabled; mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+export component TwitchChat inherits Rectangle {
+    in property <bool> floating: false;
+    in property <bool> controls-visible: true;
+    in property <bool> preview: false;
+    in property <image> mock-image;
+    background: root.floating ? transparent : Theme.background;
+    border-width: root.floating ? 0px : 1px; border-color: Theme.border;
+    // Let ListView retain its row anchor. Its content-height is an estimate,
+    // so subtracting height changes after a prepend cannot restore a position.
+    function earlier() {
+        if !AppState.chat-busy && AppState.chat-has-earlier {
+            AppState.chat-follow = false;
+            AppState.chat-earlier();
+        }
+    }
+    Timer { interval: 50ms; running: AppState.chat-follow;
+        triggered => { messages.content-y = min(0px, messages.visible-height - messages.content-height); }
+    }
+    VerticalLayout { padding: 1px; spacing: 0px;
+        if !root.floating : Rectangle { height: 56px; background: Theme.surface;
+            HorizontalLayout { padding-left: 14px; padding-right: 8px; spacing: 8px;
+                Text { text: "Chat replay"; color: Theme.strong; font-size: 15px; font-weight: 600; vertical-alignment: center; }
+                float-chat := Rectangle {
+                    width: 32px;
+                    accessible-role: button; accessible-label: "Float chat over video";
+                    accessible-action-default => { AppState.chat-floating = true; AppState.chat-follow = true; }
+                    Icon {
+                        name: "chat-float"; width: 22px; height: 22px;
+                        x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                        tint: float-touch.has-hover ? Theme.strong : Theme.muted;
+                    }
+                    float-touch := TouchArea { mouse-cursor: pointer;
+                        clicked => { AppState.chat-floating = true; AppState.chat-follow = true; }
+                    }
+                }
+                close-chat := Rectangle {
+                    width: 40px;
+                    accessible-role: button; accessible-label: "Close chat";
+                    accessible-action-default => { AppState.chat-open = false; }
+                    Icon {
+                        name: "close"; width: 24px; height: 24px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        tint: close-touch.has-hover ? Theme.accent : Theme.muted;
+                    }
+                    close-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { AppState.chat-open = false; }
+                    }
+                }
+            }
+        }
+        // Fixed height status strip, so toggling follow or busy never resizes the list.
+        if !root.floating : HorizontalLayout { height: 30px; padding-left: 14px; padding-right: 8px; spacing: 8px; cross-axis-alignment: center;
+            Text {
+                text: AppState.chat-follow ? "Following playback" : "Reading earlier messages";
+                color: Theme.subtle; font-size: 11px; overflow: elide; min-width: 0px; horizontal-stretch: 1;
+            }
+            if AppState.chat-busy : HorizontalLayout { spacing: 6px; cross-axis-alignment: center;
+                Spinner { width: 12px; height: 12px; }
+                Text { text: "Loading…"; color: Theme.muted; font-size: 11px; }
+            }
+            if !AppState.chat-busy && AppState.chat-has-earlier : ChatPill {
+                quiet: true; text: "Load earlier messages";
+                clicked => { root.earlier(); }
+            }
+        }
+        messages := ListView {
+            horizontal-scrollbar-policy: always-off;
+            // Keep floating text width stable when hover controls appear. Wheel/touch scrolling still works.
+            vertical-scrollbar-policy: root.floating ? always-off : as-needed;
+            content-width: self.visible-width;
+            scrolled => {
+                AppState.chat-follow = self.content-height - self.visible-height + self.content-y <= 12px;
+                if self.content-y >= -1px && !AppState.chat-follow { root.earlier(); }
+            }
+            for item in AppState.chat-rows : Rectangle {
+                height: root.floating ? compact.preferred-height : row.preferred-height;
+                accessible-role: text; accessible-label: item.time + " " + item.author + ": " + item.text;
+                compact := VerticalLayout {
+                    visible: root.floating; width: parent.width;
+                    padding: 5px; padding-top: 4px; padding-bottom: 5px; spacing: 3px;
+                    HorizontalLayout { spacing: 3px;
+                        Rectangle {
+                            width: min(3, item.badge-images.length) * 16px;
+                            for badge[index] in item.badge-images : Image {
+                                visible: index < 3;
+                                x: index * 16px; y: 2px; width: 14px; height: 14px;
+                                source: root.preview ? root.mock-image : AppState.avatar-image(badge.url, AppState.avatar-epoch);
+                                image-fit: contain;
+                                accessible-role: image; accessible-label: badge.label;
+                            }
+                        }
+                        Rectangle {
+                            min-width: 0px; horizontal-stretch: 1;
+                            height: foreground.preferred-height;
+                            // StyledText supplies inline username color. A matching plain Text
+                            // underneath supplies the outline (StyledText has no stroke property).
+                            Text {
+                                x: 0px; y: 0px; width: parent.width; height: parent.height;
+                                text: item.author + ": " + item.text;
+                                color: black; font-size: 14px; font-weight: 700;
+                                stroke: black; stroke-width: 1px; stroke-style: outside;
+                                wrap: word-wrap;
+                            }
+                            foreground := StyledText {
+                                x: 0px; y: 0px; width: parent.width;
+                                text: @markdown("**<font color='\{item.color}'>\{item.author}</font>: \{item.text}**");
+                                default-color: white; default-font-size: 14px;
+                            }
+                        }
+                    }
+                    if item.emotes.length > 0 : Rectangle {
+                        private property <int> columns: max(1, floor(self.width / 24px));
+                        height: ceil(item.emotes.length / self.columns) * 24px;
+                        for emote[index] in item.emotes : Image {
+                            x: mod(index, parent.columns) * 24px; y: floor(index / parent.columns) * 24px;
+                            width: 22px; height: 22px; image-fit: contain;
+                            source: root.preview ? root.mock-image : AppState.avatar-image(emote.url, AppState.avatar-epoch);
+                            accessible-role: image; accessible-label: emote.label;
+                        }
+                    }
+                }
+                row := VerticalLayout { visible: !root.floating; width: parent.width; padding: 12px; padding-top: 6px; padding-bottom: 7px; spacing: 2px;
+                    HorizontalLayout { spacing: 5px; height: 20px;
+                        for badge in item.badge-images : Image {
+                            width: 16px; height: 16px; image-fit: contain;
+                            source: root.preview ? root.mock-image : AppState.avatar-image(badge.url, AppState.avatar-epoch);
+                            accessible-role: image; accessible-label: badge.label;
+                        }
+                        Text { text: item.author; color: item.color; font-size: 13px; font-weight: 600; overflow: elide; min-width: 0px; horizontal-stretch: 1; vertical-alignment: center; }
+                        Text { width: 54px; text: item.time; color: Theme.subtle; font-size: 10px; horizontal-stretch: 0; horizontal-alignment: right; vertical-alignment: center; }
+                    }
+                    if item.badges != "" : Text { text: item.badges; color: Theme.muted; font-size: 10px; wrap: word-wrap; }
+                    Text { text: item.text; color: Theme.text; font-size: 13px; wrap: word-wrap; }
+                    if item.emotes.length > 0 : Rectangle {
+                        private property <int> columns: max(1, floor(self.width / 32px));
+                        height: ceil(item.emotes.length / self.columns) * 32px;
+                        for emote[index] in item.emotes : Rectangle {
+                            x: mod(index, parent.columns) * 32px; y: floor(index / parent.columns) * 32px;
+                            width: 28px; height: 28px; clip: true;
+                            private property <image> asset: root.preview ? root.mock-image : AppState.avatar-image(emote.url, AppState.avatar-epoch);
+                            accessible-role: image; accessible-label: emote.label;
+                            Image { x: 0px; y: 0px; width: parent.width; height: parent.height; source: parent.asset; image-fit: contain; }
+                        }
+                    }
+                }
+            }
+        }
+        if (!root.floating || root.controls-visible) && !AppState.chat-busy && AppState.chat-error == "" && AppState.chat-rows.length == 0 : Text {
+            text: "No messages at this point in the video."; color: Theme.muted; font-size: 12px; wrap: word-wrap;
+        }
+        if !root.floating && AppState.chat-error != "" : VerticalLayout { padding: 12px; spacing: 8px;
+            Text { text: AppState.chat-error; color: #ffaaa5; font-size: 12px; wrap: word-wrap; }
+            ActionButton { text: "Retry chat"; clicked => { AppState.chat-retry(); } }
+        }
+    }
+    // Overlaid on the list's bottom edge rather than laid out below it, so the list height stays put.
+    if !root.floating && !AppState.chat-follow : ChatPill {
+        x: (parent.width - self.width) / 2; y: messages.y + messages.height - self.height - 14px;
+        text: "Jump to current";
+        clicked => { AppState.chat-follow = true; }
+    }
+    if root.floating && root.controls-visible && (!AppState.chat-follow || AppState.chat-error != "" || AppState.chat-busy) : HorizontalLayout {
+        x: 0px; y: messages.y + messages.height - self.height - 6px; width: parent.width; height: 26px;
+        alignment: center; spacing: 6px;
+        if AppState.chat-error != "" : ChatPill { floating: true; text: "Retry chat"; clicked => { AppState.chat-retry(); } }
+        if !AppState.chat-follow && AppState.chat-error == "" : ChatPill { floating: true; text: "Jump to current"; clicked => { AppState.chat-follow = true; } }
+        if AppState.chat-follow && AppState.chat-error == "" : ChatPill { floating: true; enabled: false; text: "Loading chat…"; }
+    }
+}

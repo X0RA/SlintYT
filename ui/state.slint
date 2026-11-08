@@ -19,7 +19,25 @@ export struct TwitchRecent { query: string }
 // `status` reads "2 new videos" or "Up to date", and `fresh` is set when there are new ones.
 export struct TwitchFollow { login: string, name: string, picture: string, initials: string, tone: color, status: string, fresh: bool }
 
+export struct ChatImage { label: string, url: string }
+export struct ChatRow { id: string, author: string, color: color, time: string, text: string, badges: string, badge-images: [ChatImage], emotes: [ChatImage] }
+
 export global AppState {
+    in-out property <bool> chat-open: false;
+    in-out property <bool> chat-floating: false;
+    // Position is relative to the player; size is in logical pixels.
+    in-out property <float> chat-overlay-x: 0.02;
+    in-out property <float> chat-overlay-y: 0.45;
+    in-out property <float> chat-overlay-width: 280;
+    in-out property <float> chat-overlay-height: 360;
+    in-out property <bool> chat-follow: true;
+    in-out property <bool> chat-busy: false;
+    in-out property <bool> chat-has-earlier: false;
+    in-out property <string> chat-error;
+    in-out property <int> chat-reset;
+    in-out property <[ChatRow]> chat-rows;
+    callback chat-retry();
+    callback chat-earlier();
     pure callback format-comment(string) -> styled-text;
     callback play-comment-timestamp(string);
     in-out property <bool> bookmarks-enabled: false;

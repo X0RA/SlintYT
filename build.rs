@@ -32,6 +32,8 @@ fn main() {
                     "choice",
                     "back-link",
                     "scrubber",
+                    "twitch-chat",
+                    "twitch-chat-overlay",
                     "twitch-page",
                     "twitch-user-page",
                     "twitch-landing",

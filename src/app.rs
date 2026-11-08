@@ -21,6 +21,7 @@ mod bookmarks;
 mod folders;
 mod shorts;
 mod twitch;
+mod twitch_chat;
 
 enum Command {
     SessionRecovered {
@@ -93,6 +94,7 @@ pub fn wire(app: &AppWindow) -> (tokio::runtime::Runtime, Arc<crate::player::Pla
         generation.clone(),
     );
     twitch::wire(app, runtime.handle().clone());
+    twitch_chat::wire(app, runtime.handle().clone());
     let ui = app.global::<AppState>();
     let (send, weak) = (sender.clone(), app.as_weak());
     ui.on_switch_profile(move |index| {

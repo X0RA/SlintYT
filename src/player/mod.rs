@@ -1408,10 +1408,14 @@ pub fn install(app: &AppWindow, runtime: Handle) -> Arc<Playback> {
         state.set_scroll_reset(state.get_scroll_reset() + 1);
     });
     let owner = player.clone();
+    let weak = app.as_weak();
     state.on_player_seek(move |seconds| {
         if seconds.is_finite()
             && let Some(commands) = &owner.commands
         {
+            if let Some(app) = weak.upgrade() {
+                app.global::<AppState>().set_chat_follow(true);
+            }
             let _ = commands.send(Command::Seek(
                 owner.epoch.load(Ordering::Acquire),
                 seconds.max(0.),

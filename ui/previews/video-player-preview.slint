@@ -2,7 +2,7 @@ import { Button, Palette } from "std-widgets.slint";
 import { VideoPlayer } from "../views/video-player.slint";
 import { SyncMenu } from "../components/sync-menu.slint";
 import { AppState } from "../state.slint";
-export { AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData } from "../state.slint";
+export { ChatRow, ChatImage, AppState, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData } from "../state.slint";
 
 export component AppWindow inherits Window {
     title: "Video player preview";
@@ -23,6 +23,12 @@ export component AppWindow inherits Window {
     }
     VerticalLayout {
         HorizontalLayout {
+            Button { text: "Twitch chat"; clicked => {
+                AppState.player-twitch = true; AppState.chat-open = true; AppState.chat-follow = true;
+                AppState.chat-rows = [{ id:"1",author:"Runner",color:#bf94ff,time:"0:02:25",text:"Hello chat! This is a long message that wraps in the panel." },{id:"2",author:"Viewer",color:#73daca,time:"0:02:26",text:"Great run!"}];
+            } }
+            Button { text: "Float chat"; clicked => { AppState.player-twitch = true; AppState.chat-open = true; AppState.chat-floating = true; } }
+            Button { text: "YouTube"; clicked => { AppState.player-twitch = false; } }
             Button { text: "720p AV1"; clicked => { AppState.player-current-quality = "720p · AV1"; AppState.player-quality-index = 0; AppState.player-loading = false; } }
             Button { text: "Codec fallback"; clicked => { AppState.player-current-quality = "720p · VP9"; AppState.player-quality-index = 0; AppState.player-loading = false; } }
             Button { text: "Resolution fallback"; clicked => { AppState.player-current-quality = "480p · AV1"; AppState.player-quality-index = 0; AppState.player-loading = false; } }

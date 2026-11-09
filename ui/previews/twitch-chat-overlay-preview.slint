@@ -9,7 +9,8 @@ export component AppWindow inherits Window {
         AppState.chat-open = true; AppState.chat-floating = true; AppState.chat-follow = true;
         AppState.chat-busy = false; AppState.chat-error = "";
         AppState.chat-rows = [
-            {id:"1",author:"autobottelsa_",color:#e89759,text:"peanuts dot dle"},
+            {id:"wrap",author:"LongUsernameWithThreeBadges",color:#bf94ff,text:"Emotes should wrap at large sizes.",badge-images:[{label:"Moderator",url:"mock"},{label:"Subscriber",url:"mock"},{label:"VIP",url:"mock"}],emotes:[{label:"Emote 1",url:"mock"},{label:"Emote 2",url:"mock"},{label:"Emote 3",url:"mock"},{label:"Emote 4",url:"mock"},{label:"Emote 5",url:"mock"},{label:"Emote 6",url:"mock"},{label:"Emote 7",url:"mock"},{label:"Emote 8",url:"mock"}]},
+            {id:"1",author:"autobottelsa_",color:#e89759,text:"peanuts dot dle",emotes:[{label:"Kappa",url:"mock"},{label:"PogChamp",url:"mock"}]},
             {id:"2",author:"FoxyMoxy",color:#ec7676,text:"Cheeky time guess?",badge-images:[{label:"Subscriber",url:"mock"}]},
             {id:"3",author:"hejratheblue",color:#6aabe0,text:"krillion"},
             {id:"4",author:"pmacu7",color:#7c91ff,text:"do not judge a toe walker by their ability to make a rube goldberg machine or whatever"},
@@ -25,8 +26,13 @@ export component AppWindow inherits Window {
     init => { root.messages(); }
     VerticalLayout {
         HorizontalLayout {
+            Button { text: "Small text"; clicked => { AppState.chat-text-scale = 0.8; } }
+            Button { text: "Large text"; clicked => { AppState.chat-text-scale = 2; } }
+            Button { text: "Default text"; clicked => { AppState.chat-text-scale = 1; } }
             Button { text: "Messages"; clicked => { root.messages(); } }
             Button { text: "Reading"; clicked => { AppState.chat-follow = false; } }
+        }
+        HorizontalLayout {
             Button { text: "Empty"; clicked => { AppState.chat-rows = []; } }
             Button { text: "Loading"; clicked => { AppState.chat-busy = !AppState.chat-busy; } }
             Button { text: "Error"; clicked => { AppState.chat-error = "Chat is temporarily unavailable."; } }

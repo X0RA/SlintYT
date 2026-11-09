@@ -1,3 +1,4 @@
+import { ChatSizeSlider } from "chat-size-slider.slint";
 import { AppState } from "../state.slint";
 import { Theme } from "../theme.slint";
 import { Icon } from "icon.slint";
@@ -7,7 +8,7 @@ import { TwitchChat } from "twitch-chat.slint";
 export component TwitchChatOverlay inherits Rectangle {
     in property <bool> preview: false;
     in property <image> mock-image;
-    private property <bool> editing: hover.has-hover || drag.pressed || resize.pressed;
+    private property <bool> editing: hover.has-hover || drag.pressed || resize.pressed || size-slider.pressed;
     frame := Rectangle {
         width: min(root.width, max(160px, AppState.chat-overlay-width * 1px));
         height: min(root.height, max(140px, AppState.chat-overlay-height * 1px));
@@ -27,9 +28,9 @@ export component TwitchChatOverlay inherits Rectangle {
                 visible: root.editing;
                 x: 1px; y: 1px; width: parent.width - 2px; height: 32px;
                 background: #141417ee; border-radius: 5px;
-                Text { x: 10px; width: parent.width - 86px; text: "Drag chat"; color: Theme.muted; font-size: 11px; vertical-alignment: center; }
+                Text { x: 10px; width: max(0px, parent.width - 170px); text: "Drag chat"; overflow: elide; color: Theme.muted; font-size: 11px; vertical-alignment: center; }
                 drag := TouchArea {
-                    x: 0px; y: 0px; width: parent.width - 72px; height: parent.height;
+                    x: 0px; y: 0px; width: max(20px, parent.width - 160px); height: parent.height;
                     mouse-cursor: move;
                     accessible-role: button; accessible-label: "Move chat";
                     moved => {
@@ -38,6 +39,9 @@ export component TwitchChatOverlay inherits Rectangle {
                             AppState.chat-overlay-y = max(0px, min(root.height - frame.height, frame.y + self.mouse-y - self.pressed-y)) / max(1px, root.height);
                         }
                     }
+                }
+                size-slider := ChatSizeSlider {
+                    x: max(28px, parent.width - 150px); y: 4px; width: min(78px, parent.width - 100px); height: 24px;
                 }
                 dock := Rectangle {
                     x: parent.width - 68px; y: 0px; width: 32px; height: 32px;

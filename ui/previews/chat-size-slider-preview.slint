@@ -1,0 +1,11 @@
+import { ChatSizeSlider } from "../components/chat-size-slider.slint";
+import { AppState } from "../state.slint";
+export component Preview inherits Window {
+    width: 240px; height: 160px; background: #141417;
+    VerticalLayout {
+        padding: 16px; spacing: 12px;
+        ChatSizeSlider { width: 80px; }
+        ChatSizeSlider { width: 58px; }
+        Text { text: "Size: " + round(AppState.chat-text-scale * 100) + "%"; color: white; }
+    }
+}

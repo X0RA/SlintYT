@@ -1,3 +1,4 @@
+import { ChatSizeSlider } from "chat-size-slider.slint";
 import { ListView, Spinner } from "std-widgets.slint";
 import { AppState } from "../state.slint";
 import { Theme } from "../theme.slint";
@@ -49,7 +50,11 @@ export component TwitchChat inherits Rectangle {
     VerticalLayout { padding: 1px; spacing: 0px;
         if !root.floating : Rectangle { height: 56px; background: Theme.surface;
             HorizontalLayout { padding-left: 14px; padding-right: 8px; spacing: 8px;
-                Text { text: "Chat replay"; color: Theme.strong; font-size: 15px; font-weight: 600; vertical-alignment: center; }
+                Text { text: "Chat replay"; min-width: 0px; overflow: elide; color: Theme.strong; font-size: 15px; font-weight: 600; vertical-alignment: center; }
+                Rectangle {
+                    width: min(80px, max(58px, root.width * 0.25));
+                    ChatSizeSlider { width: parent.width; y: (parent.height - self.height) / 2; }
+                }
                 float-chat := Rectangle {
                     width: 32px;
                     accessible-role: button; accessible-label: "Float chat over video";
@@ -112,10 +117,10 @@ export component TwitchChat inherits Rectangle {
                     padding: 5px; padding-top: 4px; padding-bottom: 5px; spacing: 3px;
                     HorizontalLayout { spacing: 3px;
                         Rectangle {
-                            width: min(3, item.badge-images.length) * 16px;
+                            width: min(3, item.badge-images.length) * (16px * AppState.chat-text-scale);
                             for badge[index] in item.badge-images : Image {
                                 visible: index < 3;
-                                x: index * 16px; y: 2px; width: 14px; height: 14px;
+                                x: index * (16px * AppState.chat-text-scale); y: 2px * AppState.chat-text-scale; width: (14px * AppState.chat-text-scale); height: (14px * AppState.chat-text-scale);
                                 source: root.preview ? root.mock-image : AppState.avatar-image(badge.url, AppState.avatar-epoch);
                                 image-fit: contain;
                                 accessible-role: image; accessible-label: badge.label;
@@ -129,46 +134,46 @@ export component TwitchChat inherits Rectangle {
                             Text {
                                 x: 0px; y: 0px; width: parent.width; height: parent.height;
                                 text: item.author + ": " + item.text;
-                                color: black; font-size: 14px; font-weight: 700;
+                                color: black; font-size: (14px * AppState.chat-text-scale); font-weight: 700;
                                 stroke: black; stroke-width: 1px; stroke-style: outside;
                                 wrap: word-wrap;
                             }
                             foreground := StyledText {
                                 x: 0px; y: 0px; width: parent.width;
                                 text: @markdown("**<font color='\{item.color}'>\{item.author}</font>: \{item.text}**");
-                                default-color: white; default-font-size: 14px;
+                                default-color: white; default-font-size: (14px * AppState.chat-text-scale);
                             }
                         }
                     }
                     if item.emotes.length > 0 : Rectangle {
-                        private property <int> columns: max(1, floor(self.width / 24px));
-                        height: ceil(item.emotes.length / self.columns) * 24px;
+                        private property <int> columns: max(1, floor(self.width / (24px * AppState.chat-text-scale)));
+                        height: ceil(item.emotes.length / self.columns) * (24px * AppState.chat-text-scale);
                         for emote[index] in item.emotes : Image {
-                            x: mod(index, parent.columns) * 24px; y: floor(index / parent.columns) * 24px;
-                            width: 22px; height: 22px; image-fit: contain;
+                            x: mod(index, parent.columns) * (24px * AppState.chat-text-scale); y: floor(index / parent.columns) * (24px * AppState.chat-text-scale);
+                            width: (22px * AppState.chat-text-scale); height: (22px * AppState.chat-text-scale); image-fit: contain;
                             source: root.preview ? root.mock-image : AppState.avatar-image(emote.url, AppState.avatar-epoch);
                             accessible-role: image; accessible-label: emote.label;
                         }
                     }
                 }
                 row := VerticalLayout { visible: !root.floating; width: parent.width; padding: 12px; padding-top: 6px; padding-bottom: 7px; spacing: 2px;
-                    HorizontalLayout { spacing: 5px; height: 20px;
+                    HorizontalLayout { spacing: 5px; height: 20px * AppState.chat-text-scale;
                         for badge in item.badge-images : Image {
-                            width: 16px; height: 16px; image-fit: contain;
+                            width: (16px * AppState.chat-text-scale); height: (16px * AppState.chat-text-scale); image-fit: contain;
                             source: root.preview ? root.mock-image : AppState.avatar-image(badge.url, AppState.avatar-epoch);
                             accessible-role: image; accessible-label: badge.label;
                         }
-                        Text { text: item.author; color: item.color; font-size: 13px; font-weight: 600; overflow: elide; min-width: 0px; horizontal-stretch: 1; vertical-alignment: center; }
+                        Text { text: item.author; color: item.color; font-size: 13px * AppState.chat-text-scale; font-weight: 600; overflow: elide; min-width: 0px; horizontal-stretch: 1; vertical-alignment: center; }
                         Text { width: 54px; text: item.time; color: Theme.subtle; font-size: 10px; horizontal-stretch: 0; horizontal-alignment: right; vertical-alignment: center; }
                     }
                     if item.badges != "" : Text { text: item.badges; color: Theme.muted; font-size: 10px; wrap: word-wrap; }
-                    Text { text: item.text; color: Theme.text; font-size: 13px; wrap: word-wrap; }
+                    Text { text: item.text; color: Theme.text; font-size: 13px * AppState.chat-text-scale; wrap: word-wrap; }
                     if item.emotes.length > 0 : Rectangle {
-                        private property <int> columns: max(1, floor(self.width / 32px));
-                        height: ceil(item.emotes.length / self.columns) * 32px;
+                        private property <int> columns: max(1, floor(self.width / (32px * AppState.chat-text-scale)));
+                        height: ceil(item.emotes.length / self.columns) * (32px * AppState.chat-text-scale);
                         for emote[index] in item.emotes : Rectangle {
-                            x: mod(index, parent.columns) * 32px; y: floor(index / parent.columns) * 32px;
-                            width: 28px; height: 28px; clip: true;
+                            x: mod(index, parent.columns) * (32px * AppState.chat-text-scale); y: floor(index / parent.columns) * (32px * AppState.chat-text-scale);
+                            width: (28px * AppState.chat-text-scale); height: (28px * AppState.chat-text-scale); clip: true;
                             private property <image> asset: root.preview ? root.mock-image : AppState.avatar-image(emote.url, AppState.avatar-epoch);
                             accessible-role: image; accessible-label: emote.label;
                             Image { x: 0px; y: 0px; width: parent.width; height: parent.height; source: parent.asset; image-fit: contain; }

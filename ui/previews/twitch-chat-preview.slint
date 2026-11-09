@@ -5,10 +5,12 @@ import { AppState } from "../state.slint";
 export { AppState, ChatRow, ChatImage, BrowserProfile, VideoData, FeedSection, CommentData, Breadcrumb, LinkData, TwitchResult, TwitchRecent, TwitchFollow } from "../state.slint";
 export component AppWindow inherits Window {
     title: "Twitch chat preview"; width: 480px; height: 700px;
+    private property <bool> narrow: false;
     function populate() {
         AppState.chat-open = true;
         AppState.chat-error = ""; AppState.chat-busy = false;
         AppState.chat-rows = [
+            {id:"wrap",author:"LongUsernameWithThreeBadges",color:#bf94ff,text:"Emotes should wrap at large sizes.",badge-images:[{label:"Moderator",url:"mock"},{label:"Subscriber",url:"mock"},{label:"VIP",url:"mock"}],emotes:[{label:"Emote 1",url:"mock"},{label:"Emote 2",url:"mock"},{label:"Emote 3",url:"mock"},{label:"Emote 4",url:"mock"},{label:"Emote 5",url:"mock"},{label:"Emote 6",url:"mock"},{label:"Emote 7",url:"mock"},{label:"Emote 8",url:"mock"}]},
             {id:"1",author:"SpeedRunner",color:#bf94ff,time:"0:01:02",text:"What a run! Kappa",badges:"moderator",emotes:[{label:"Kappa",url:"mock"}]},
             {id:"2",author:"Viewer with a very long display name",color:#73daca,time:"0:01:03",text:"This is a longer message that wraps across several lines so we can check the layout in a narrow chat panel. Hello everyone 👋"},
             {id:"3",author:"Unknown user",color:#bf94ff,time:"0:01:04",text:"A message from an unavailable account."},
@@ -24,9 +26,17 @@ export component AppWindow inherits Window {
     init => { root.populate(); AppState.chat-follow = true; }
     VerticalLayout {
         HorizontalLayout {
+            Button { text: "Small text"; clicked => { AppState.chat-text-scale = 0.8; } }
+            Button { text: "Large text"; clicked => { AppState.chat-text-scale = 2; } }
+            Button { text: "Default text"; clicked => { AppState.chat-text-scale = 1; } }
+            Button { text: "Narrow panel"; clicked => { root.narrow = !root.narrow; } }
+        }
+        HorizontalLayout {
             Button { text:"Messages"; clicked => { root.populate(); } }
             Button { text:"Following"; clicked => { root.populate(); AppState.chat-follow = true; AppState.chat-has-earlier = true; } }
             Button { text:"Reading"; clicked => { root.populate(); AppState.chat-follow = false; AppState.chat-has-earlier = true; } }
+        }
+        HorizontalLayout {
             Button { text:"Loading earlier"; clicked => { root.populate(); AppState.chat-follow = false; AppState.chat-busy = true; } }
             Button { text:"Loading"; clicked => { AppState.chat-rows = []; AppState.chat-busy = true; AppState.chat-error = ""; } }
             Button { text:"Empty"; clicked => { AppState.chat-rows = []; AppState.chat-busy = false; AppState.chat-error = ""; } }
@@ -34,7 +44,7 @@ export component AppWindow inherits Window {
         }
         Rectangle {
             background: #eae7df;
-            if AppState.chat-open && !AppState.chat-floating : TwitchChat { preview: true; mock-image: @image-url("mock-thumbnail.svg"); }
+            if AppState.chat-open && !AppState.chat-floating : TwitchChat { width: root.narrow ? 220px : parent.width; height: parent.height; preview: true; mock-image: @image-url("mock-thumbnail.svg"); }
             if AppState.chat-open && AppState.chat-floating : TwitchChatOverlay { preview: true; mock-image: @image-url("mock-thumbnail.svg"); }
         }
     }

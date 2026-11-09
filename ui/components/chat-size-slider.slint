@@ -1,0 +1,36 @@
+import { AppState } from "../state.slint";
+import { Theme } from "../theme.slint";
+
+// Keep keyboard focus on the player, including paired frame-step key events.
+export component ChatSizeSlider inherits Rectangle {
+    out property <bool> pressed: touch.pressed;
+    height: 24px;
+    accessible-role: slider;
+    accessible-label: "Chat text size percent";
+    accessible-value: round(AppState.chat-text-scale * 100);
+    accessible-value-minimum: 80;
+    accessible-value-maximum: 200;
+    function set-scale(value: float) {
+        AppState.chat-text-scale = max(0.8, min(2, round(value * 20) / 20));
+    }
+    accessible-action-increment => { root.set-scale(AppState.chat-text-scale + 0.05); }
+    accessible-action-decrement => { root.set-scale(AppState.chat-text-scale - 0.05); }
+    accessible-action-set-value(value) => { if value.is-float() { root.set-scale(value.to-float() / 100); } }
+    Text { x: 0px; width: 12px; text: "A"; font-size: 10px; color: Theme.muted; vertical-alignment: center; }
+    Text { x: parent.width - 14px; width: 14px; text: "A"; font-size: 16px; color: Theme.text; vertical-alignment: center; }
+    track := Rectangle {
+        x: 16px; width: max(1px, parent.width - 36px); y: (parent.height - 3px) / 2;
+        height: 3px; border-radius: 2px; background: Theme.muted;
+        Rectangle { width: parent.width * (AppState.chat-text-scale - 0.8) / 1.2; background: Theme.accent; border-radius: 2px; }
+        Rectangle {
+            x: parent.width * (AppState.chat-text-scale - 0.8) / 1.2 - 4px;
+            y: -3px; width: 9px; height: 9px; border-radius: 5px; background: Theme.strong;
+        }
+    }
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        function update() { root.set-scale(0.8 + 1.2 * (self.mouse-x - track.x) / track.width); }
+        pointer-event(event) => { if event.kind == PointerEventKind.down { self.update(); } }
+        moved => { if self.pressed { self.update(); } }
+    }
+}

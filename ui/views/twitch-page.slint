@@ -11,8 +11,8 @@ import { TwitchUserPage } from "twitch-user-page.slint";
 component TwitchSearch inherits Rectangle {
     private property <bool> landing: AppState.twitch-results-query == "";
     private property <string> text: AppState.twitch-search-text;
-    private property <int> columns: max(1, floor((root.width - 24px + 12px) / 252px));
-    private property <length> card-width: (results.visible-width - 24px - (root.columns - 1) * 12px) / root.columns;
+    private property <int> columns: max(1, min(4, floor((root.width + 20px) / 310px)));
+    private property <length> card-width: floor((results.visible-width - (root.columns - 1) * 20px) / root.columns / 1px) * 1px;
     changed columns => { AppState.twitch-columns = root.columns; }
     changed text => {
         AppState.twitch-recent-refresh();
@@ -43,9 +43,9 @@ component TwitchSearch inherits Rectangle {
         results := ScrollView {
             vertical-stretch: 1; horizontal-scrollbar-policy: always-off;
             VerticalLayout {
-                width: results.visible-width; padding-left: 12px; padding-right: 12px;
+                width: results.visible-width;
                 padding-bottom: 32px; spacing: 16px; alignment: start;
-                if root.landing : TwitchLanding { card-width: root.card-width; }
+                if root.landing : TwitchLanding { columns: root.columns; card-width: root.card-width; }
                 if !root.landing && AppState.twitch-results-tab != 2 : VerticalLayout { spacing: 12px;
                     HorizontalLayout {
                         SectionHeading { text: "Channels"; count: AppState.twitch-channel-total > 0 ? AppState.twitch-channel-total + " results" : ""; }
@@ -53,7 +53,7 @@ component TwitchSearch inherits Rectangle {
                             text: "See all"; clicked => { AppState.twitch-results-tab = 1; AppState.twitch-sort = 0; AppState.twitch-sort-changed(); }
                         }
                     }
-                    FlexboxLayout { spacing: 12px;
+                    FlexboxLayout { spacing: 20px;
                         for item[index] in AppState.twitch-channels : Rectangle {
                             visible: AppState.twitch-results-tab == 1 || index < root.columns * 2;
                             width: self.visible ? root.card-width : 0px; height: self.visible ? 76px : 0px;
@@ -66,8 +66,11 @@ component TwitchSearch inherits Rectangle {
                 }
                 if !root.landing && AppState.twitch-results-tab != 1 : VerticalLayout { spacing: 12px;
                     SectionHeading { text: "Videos"; count: AppState.twitch-video-total > 0 ? AppState.twitch-video-total + " results" : ""; }
-                    FlexboxLayout { spacing: 12px;
-                        for item in AppState.twitch-results : TwitchVideoCard {
+                    Rectangle {
+                        height: ceil(AppState.twitch-results.length / root.columns) * (round(root.card-width * 9 / 16 / 1px) * 1px + 39px + 24px) - (AppState.twitch-results.length > 0 ? 24px : 0px);
+                        for item[index] in AppState.twitch-results : TwitchVideoCard {
+                            x: mod(index, root.columns) * (root.card-width + 20px);
+                            y: floor(index / root.columns) * (self.height + 24px);
                             width: root.card-width; item: item;
                             activate => { twitch-search.blur(); AppState.twitch-play(item.id, item.title, item.channel); }
                         }

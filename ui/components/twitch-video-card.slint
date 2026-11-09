@@ -9,7 +9,7 @@ export component TwitchVideoCard inherits Rectangle {
     callback activate();
     callback bookmark-toggle();
     bookmark-toggle => { AppState.twitch-toggle-bookmark(root.item.id); }
-    height: root.width * 9 / 16 + 39px;
+    height: round(root.width * 9 / 16 / 1px) * 1px + 39px;
     VideoCard {
         video: {
             id: root.item.id, title: root.item.title, channel: root.item.channel,

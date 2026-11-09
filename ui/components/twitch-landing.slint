@@ -40,7 +40,9 @@ component FollowCard inherits Rectangle {
 // Shown on the Twitch page with no search: followed channels, then bookmarked
 // videos. Both are kept on this computer.
 export component TwitchLanding inherits Rectangle {
-    in property <length> card-width: 220px;
+    // Match the YouTube feed's column breakpoints, card widths and gutters.
+    in property <int> columns: max(1, min(4, floor((root.width + 20px) / 310px)));
+    in property <length> card-width: floor((root.width - (root.columns - 1) * 20px) / root.columns / 1px) * 1px;
     in property <length> gap: 12px;
     private property <int> follow-columns: max(1, floor((root.width + root.gap) / (230px + root.gap)));
     private property <length> follow-width: (root.width - root.gap * (root.follow-columns - 1)) / root.follow-columns;
@@ -71,9 +73,11 @@ export component TwitchLanding inherits Rectangle {
             text: "Videos you bookmark show up here. Hover over a video and press the bookmark button, or use the one on the player.";
             color: Theme.subtle; font-size: 13px; wrap: word-wrap;
         }
-        if AppState.twitch-bookmarks.length > 0 : FlexboxLayout {
-            spacing: root.gap;
-            for item in AppState.twitch-bookmarks : twitch-bookmark-card := TwitchVideoCard {
+        if AppState.twitch-bookmarks.length > 0 : Rectangle {
+            height: ceil(AppState.twitch-bookmarks.length / root.columns) * (round(root.card-width * 9 / 16 / 1px) * 1px + 39px + 24px) - 24px;
+            for item[index] in AppState.twitch-bookmarks : twitch-bookmark-card := TwitchVideoCard {
+                x: mod(index, root.columns) * (root.card-width + 20px);
+                y: floor(index / root.columns) * (self.height + 24px);
                 width: root.card-width; item: item;
                 activate => { AppState.twitch-play(item.id, item.title, item.channel); }
             }

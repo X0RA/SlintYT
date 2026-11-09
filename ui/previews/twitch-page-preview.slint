@@ -20,6 +20,7 @@ export component AppWindow inherits Window {
         HorizontalLayout { height: 40px;
             Button { text: "Results"; clicked => { root.full(); } }
             Button { text: "Landing"; clicked => { root.full(); AppState.twitch-results-query = ""; AppState.twitch-search-text = ""; } }
+            Button { text: "Bookmark grid"; clicked => { root.full(); AppState.twitch-bookmarks = AppState.twitch-results; AppState.twitch-results-query = ""; AppState.twitch-search-text = ""; } }
             Button { text: "Empty"; clicked => { root.clear(); } }
             Button { text: "Loading"; clicked => { root.clear(); AppState.twitch-busy = true; AppState.twitch-channels-busy = true; } }
             Button { text: "Error"; clicked => { root.clear(); AppState.twitch-error = "Twitch search is unavailable. Try again."; } }

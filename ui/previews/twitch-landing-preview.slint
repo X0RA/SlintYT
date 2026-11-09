@@ -15,6 +15,7 @@ export component AppWindow inherits Window {
         Rectangle { vertical-stretch: 1; }
         HorizontalLayout {
             Button { text: "Full"; clicked => { root.full(); } }
+            Button { text: "Single bookmark"; clicked => { AppState.twitch-bookmarks = [{ id: "single", title: "A very long single bookmarked broadcast title that should elide", channel: "Northernlion", stats: "135.7K views", duration: "4:59:41", initials: "N", tone: #645239 }]; } }
             Button { text: "Empty"; clicked => { AppState.twitch-following-list = []; AppState.twitch-following-total = 0; AppState.twitch-bookmarks = []; } }
         }
     }

@@ -277,6 +277,8 @@ pub fn wire(app: &AppWindow, runtime: tokio::runtime::Handle) {
         if state.get_update_busy() {
             return;
         }
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        state.set_update_command(terminal_command(&latest, &location).into());
         state.set_update_busy(true);
         let task = handle.spawn(install(
             weak.clone(),
@@ -442,6 +444,20 @@ async fn install(
     }
 }
 
+/// Uses the same release and install location, with terminal password prompts.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn terminal_command(latest: &str, location: &Location) -> String {
+    let prefix = location.prefix.as_ref().map_or(String::new(), |prefix| {
+        format!(
+            " PREFIX='{}'",
+            prefix.to_string_lossy().replace('\'', "'\"'\"'")
+        )
+    });
+    format!(
+        "curl -fsSL https://raw.githubusercontent.com/{REPOSITORY}/{latest}/scripts/{SCRIPT} | env -u SLINTYT_REPO SLINTYT_ELEVATE=terminal SLINTYT_VERSION={latest}{prefix} bash"
+    )
+}
+
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 async fn install(
     _weak: slint::Weak<AppWindow>,
@@ -587,7 +603,13 @@ async fn run_installer(
 fn readable(line: &str) -> Option<String> {
     let line = line.rsplit('\r').next().unwrap_or_default().trim();
     let first = line.chars().next()?;
-    if first.is_ascii_digit() || first == '%' || first == '#' {
+    if first.is_ascii_digit()
+        || first == '%'
+        || first == '#'
+        || line
+            .split_whitespace()
+            .eq(["Dload", "Upload", "Total", "Spent", "Left", "Speed"])
+    {
         return None;
     }
     Some(line.chars().take(200).collect())
@@ -688,6 +710,10 @@ mod tests {
         );
         assert_eq!(readable("  % Total    % Received"), None);
         assert_eq!(readable("100  1234k  100 1234k"), None);
+        assert_eq!(
+            readable(" Dload  Upload   Total   Spent    Left  Speed"),
+            None
+        );
         assert_eq!(
             readable("\r  5  100k\rInstalling to /Applications"),
             Some("Installing to /Applications".into())

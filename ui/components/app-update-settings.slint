@@ -1,3 +1,4 @@
+import { ProgressIndicator } from "std-widgets.slint";
 import { Theme } from "../theme.slint";
 import { ActionButton } from "action-button.slint";
 
@@ -14,6 +15,10 @@ export component AppUpdateSettings inherits Rectangle {
     in property <string> latest;
     in property <bool> installable;
     in property <string> url;
+    in property <string> command;
+    private property <bool> copied;
+    changed command => { root.copied = false; }
+    changed error => { root.copied = false; }
     callback check-updates();
     callback install-update();
     callback open-release(string);
@@ -31,6 +36,35 @@ export component AppUpdateSettings inherits Rectangle {
             color: Theme.subtle; font-size: 13px; wrap: word-wrap;
         }
         if root.status != "" : status-label := Text { text: root.status; color: root.error ? #ff9b9b : Theme.muted; font-size: 13px; wrap: word-wrap; }
+        if root.busy : update-progress := ProgressIndicator {
+            indeterminate: true;
+            height: 4px;
+            accessible-label: "Update in progress";
+        }
+        if root.error && !root.busy && root.command != "" : VerticalLayout {
+            spacing: 10px;
+            Text { text: "You can also run this command in a terminal:"; color: Theme.muted; font-size: 13px; wrap: word-wrap; }
+            Rectangle {
+                background: Theme.background; border-radius: 8px;
+                min-height: 100px;
+                VerticalLayout {
+                    padding: 12px;
+                    terminal-command := TextInput {
+                        text: root.command; read-only: true; wrap: word-wrap;
+                        color: Theme.text; font-size: 13px;
+                        accessible-label: "Terminal install command";
+                    }
+                }
+            }
+            HorizontalLayout {
+                alignment: start;
+                copy-command := ActionButton {
+                    text: root.copied ? "Copied" : "Copy command";
+                    outlined: true;
+                    clicked => { terminal-command.select-all(); terminal-command.copy(); root.copied = true; }
+                }
+            }
+        }
         HorizontalLayout {
             spacing: 10px; alignment: start;
             if root.installable && !root.busy : install-button := ActionButton {

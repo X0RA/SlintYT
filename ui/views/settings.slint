@@ -172,6 +172,7 @@ export component SettingsPage inherits Rectangle {
                         version: AppState.app-version; supported: AppState.update-supported;
                         busy: AppState.update-busy; error: AppState.update-error; status: AppState.update-status;
                         latest: AppState.update-latest; installable: AppState.update-installable; url: AppState.update-url;
+                        command: AppState.update-command;
                         check-updates => { AppState.check-app-update(); }
                         install-update => { AppState.install-app-update(); }
                         open-release(url) => { AppState.open-url(url); }

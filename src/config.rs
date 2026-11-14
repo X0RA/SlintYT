@@ -42,6 +42,8 @@ impl SavedProfile {
 #[derive(Default, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
+    pub show_shorts: bool,
+    #[serde(default)]
     pub playback: crate::playback_settings::Preferences,
     #[serde(default)]
     pub bookmarks_enabled: bool,
@@ -190,6 +192,13 @@ impl Store {
         self.write(&settings)
     }
 
+    pub fn save_show_shorts(&self, show: bool) -> Result<()> {
+        let _lock = SETTINGS_WRITE.lock().unwrap();
+        let mut settings = self.load_settings()?;
+        settings.show_shorts = show;
+        self.write(&settings)
+    }
+
     pub fn save_playback(&self, playback: &crate::playback_settings::Preferences) -> Result<()> {
         let _guard = SETTINGS_WRITE.lock().unwrap();
         let mut settings = self.load_settings()?;
@@ -222,6 +231,22 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shorts_preference_defaults_to_hidden_and_survives_other_writes() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store {
+            root: root.path().into(),
+        };
+        assert!(!store.load_settings().unwrap().show_shorts);
+        store.save_show_shorts(true).unwrap();
+        store
+            .save_playback(&crate::playback_settings::Preferences::default())
+            .unwrap();
+        assert!(store.load_settings().unwrap().show_shorts);
+        store.save_show_shorts(false).unwrap();
+        assert!(!store.load_settings().unwrap().show_shorts);
+    }
 
     #[test]
     fn playback_defaults_migrate_and_preferences_survive_other_settings_writes() {

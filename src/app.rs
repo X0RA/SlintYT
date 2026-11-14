@@ -96,6 +96,20 @@ pub fn wire(app: &AppWindow) -> (tokio::runtime::Runtime, Arc<crate::player::Pla
     twitch::wire(app, runtime.handle().clone());
     twitch_chat::wire(app, runtime.handle().clone());
     let ui = app.global::<AppState>();
+    if let Ok(settings) = Store::new().and_then(|s| s.load_settings()) {
+        ui.set_hide_shorts(!settings.show_shorts);
+    }
+    let weak = app.as_weak();
+    ui.on_hide_shorts_changed(move |hide| {
+        if let Some(app) = weak.upgrade() {
+            let state = app.global::<AppState>();
+            if let Err(error) = Store::new().and_then(|s| s.save_show_shorts(!hide)) {
+                state.set_hide_shorts(!hide);
+                state.set_error(format!("Could not save Shorts setting: {error}").into());
+            }
+            reflow(&app, state.get_feed_columns());
+        }
+    });
     let (send, weak) = (sender.clone(), app.as_weak());
     ui.on_switch_profile(move |index| {
         if index >= 0 && begin(&weak, "Connecting saved profile…") {
@@ -1327,7 +1341,15 @@ async fn worker(
             } else {
                 FeedPage::default()
             };
-            let count = reload_pages.unwrap_or_else(|| if append { 1 } else { feed.pages.max(1) });
+            // History changes at the front. Publish its newest page promptly instead
+            // of waiting to replay every page from a previous visit.
+            let count = reload_pages.unwrap_or_else(|| {
+                if append || current_view == View::History {
+                    1
+                } else {
+                    feed.pages.max(1)
+                }
+            });
             session.annotate(&mut feed.videos);
             let foreground = feed.pages == 0 || append;
             publish_feed(
@@ -1761,63 +1783,160 @@ pub(crate) fn tone(name: &str) -> slint::Color {
 
 pub(crate) fn reflow(app: &AppWindow, columns: i32) {
     let state = app.global::<AppState>();
-    let model = state.get_videos();
+    let rows = feed_sections(
+        state.get_videos(),
+        state.get_sections(),
+        state.get_view_kind(),
+        state.get_hide_shorts(),
+        columns,
+    );
+    state.set_sections(ModelRc::new(VecModel::from(rows)));
+}
+
+fn feed_sections(
+    model: ModelRc<VideoData>,
+    sections: ModelRc<crate::FeedSection>,
+    view_kind: i32,
+    hide_shorts: bool,
+    columns: i32,
+) -> Vec<crate::FeedSection> {
     let mut rows = Vec::new();
     let columns = columns.clamp(1, 6) as usize;
-    let grouped = matches!(state.get_view_kind(), 1 | 5);
-    // Keep each subscription group's choice when resizing or loading another page.
-    let collapsed: std::collections::HashSet<_> = state
-        .get_sections()
+    let grouped = matches!(view_kind, 1 | 5);
+    // Preserve choices across pagination, metadata updates and resize.
+    let previous: std::collections::HashMap<_, _> = sections
         .iter()
-        .filter(|section| state.get_view_kind() == 5 && section.collapsed)
-        .map(|section| section.label.to_string())
+        .filter(|s| !s.label.is_empty())
+        .map(|s| ((s.label.to_string(), s.shorts), s.collapsed))
         .collect();
-    let mut index = 0;
-    while index < model.row_count() {
-        let group = model
-            .row_data(index)
-            .map(|v| v.group.to_string())
-            .unwrap_or_default();
-        let mut end = index + 1;
-        while end < model.row_count()
-            && (!grouped || model.row_data(end).is_some_and(|v| v.group == group))
-        {
-            end += 1;
+    let history = view_kind == 1;
+    let mut groups: Vec<(String, Vec<usize>)> = Vec::new();
+    for (index, video) in model.iter().enumerate() {
+        if !history && hide_shorts && video.duration == "SHORT" {
+            continue;
         }
-        let start = index;
-        let header_index = rows.len() as i32;
-        let detail = match end - start {
-            1 => "1 video".to_string(),
-            n => format!("{n} videos"),
+        let group = if grouped {
+            video.group.to_string()
+        } else {
+            String::new()
         };
-        while index < end {
-            let count = (end - index).min(columns);
-            let first = grouped && index == start;
-            rows.push(crate::FeedSection {
-                label: if first {
-                    group.clone().into()
-                } else {
-                    "".into()
-                },
-                detail: if first {
-                    detail.clone().into()
-                } else {
-                    "".into()
-                },
-                start: index as i32,
-                count: count as i32,
-                header_index,
-                collapsed: first && collapsed.contains(&group),
-            });
-            index += count;
+        if let Some((_, indices)) = groups.iter_mut().find(|(name, _)| *name == group) {
+            indices.push(index);
+        } else {
+            groups.push((group, vec![index]));
         }
     }
-    state.set_sections(ModelRc::new(VecModel::from(rows)));
+    for (group, indices) in groups {
+        // The API supplies newest-first watch order, not watch timestamps.
+        // Stable partitioning keeps that order within each day's video/Shorts list.
+        for shorts in [false, true] {
+            if shorts && !history {
+                continue;
+            }
+            let indices: Vec<_> = indices
+                .iter()
+                .copied()
+                .filter(|&i| {
+                    !history
+                        || model
+                            .row_data(i)
+                            .is_some_and(|v| (v.duration == "SHORT") == shorts)
+                })
+                .collect();
+            let label = if shorts {
+                format!(
+                    "{} · Shorts",
+                    if group.is_empty() { "History" } else { &group }
+                )
+            } else {
+                group.clone()
+            };
+            let header_index = rows.len() as i32;
+            for (chunk_index, chunk) in indices.chunks(columns).enumerate() {
+                let first = chunk_index == 0;
+                rows.push(crate::FeedSection {
+                    label: if first {
+                        label.clone().into()
+                    } else {
+                        "".into()
+                    },
+                    detail: if first {
+                        format!(
+                            "{} {}",
+                            indices.len(),
+                            if shorts {
+                                "Shorts"
+                            } else if indices.len() == 1 {
+                                "video"
+                            } else {
+                                "videos"
+                            }
+                        )
+                        .into()
+                    } else {
+                        "".into()
+                    },
+                    start: chunk[0] as i32,
+                    count: chunk.len() as i32,
+                    indices: ModelRc::new(VecModel::from(
+                        chunk.iter().map(|i| *i as i32).collect::<Vec<_>>(),
+                    )),
+                    header_index,
+                    shorts,
+                    collapsed: first
+                        && previous
+                            .get(&(label.clone(), shorts))
+                            .copied()
+                            .unwrap_or(shorts),
+                });
+            }
+        }
+    }
+    rows
 }
 
 #[cfg(test)]
 mod profile_removal_tests {
     use super::*;
+
+    #[test]
+    fn history_sections_keep_watch_order_and_shorts_choices() {
+        let model = ModelRc::new(VecModel::from(
+            [
+                ("Today", "SHORT"),
+                ("Today", "10:00"),
+                ("Today", "20:00"),
+                ("Today", "SHORT"),
+                ("Yesterday", "SHORT"),
+            ]
+            .into_iter()
+            .map(|(group, duration)| VideoData {
+                group: group.into(),
+                duration: duration.into(),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>(),
+        ));
+        let mut rows = feed_sections(model.clone(), ModelRc::default(), 1, true, 2);
+        assert_eq!(rows[0].indices.iter().collect::<Vec<_>>(), [1, 2]);
+        assert_eq!(rows[1].indices.iter().collect::<Vec<_>>(), [0, 3]);
+        assert!(rows[1].collapsed && rows[2].collapsed);
+        rows[1].collapsed = false;
+        let resized = feed_sections(
+            model.clone(),
+            ModelRc::new(VecModel::from(rows)),
+            1,
+            true,
+            1,
+        );
+        assert!(!resized[2].collapsed);
+        assert_eq!(resized[3].header_index, 2);
+        assert!(resized[4].collapsed);
+        let hidden = feed_sections(model.clone(), ModelRc::default(), 0, true, 3);
+        assert_eq!(hidden[0].indices.iter().collect::<Vec<_>>(), [1, 2]);
+        let shown = feed_sections(model, ModelRc::default(), 0, false, 6);
+        assert_eq!(shown[0].count, 5);
+    }
 
     #[test]
     fn queued_removals_keep_the_displayed_identity_after_indices_shift() {

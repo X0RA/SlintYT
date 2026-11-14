@@ -137,7 +137,7 @@ export component SettingsPage inherits Rectangle {
                     SettingRow { label: "Hide watched videos"; help: "Leave watched videos out of Home and Subscriptions."; kind: 1; options: []; action: ""; checked: false; }
                 }
                 feed := SettingSection { title: "Feed"; help: "What shows up in Home and Subscriptions.";
-                    SettingRow { first: true; label: "Hide Shorts"; help: "Skip vertical short-form videos."; kind: 1; options: []; action: ""; checked: true; }
+                    SettingRow { first: true; label: "Hide Shorts"; help: "Hide Shorts in feeds. History keeps them in collapsed daily sections."; kind: 1; options: []; action: ""; checked <=> AppState.hide-shorts; toggled(value) => { AppState.hide-shorts-changed(value); } }
                     SettingRow { label: "Hide live streams and premieres"; help: "Only show videos that are ready to watch."; kind: 1; options: []; action: ""; checked: false; }
                 }
                 bookmarks := VerticalLayout { spacing: 14px;

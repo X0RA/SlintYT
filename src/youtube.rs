@@ -972,6 +972,9 @@ fn collect(
                 None
             };
             if let Some(mut video) = item {
+                if object.contains_key("reelItemRenderer") {
+                    video.duration = "SHORT".into();
+                }
                 mark_history(&mut video, history_date);
                 if video.title.is_empty()
                     || playlist_id(&video.id).is_err()
@@ -1220,7 +1223,11 @@ fn legacy_video(r: &Value) -> Option<Video> {
                 .unwrap_or(&Value::Null),
         ),
         metadata: legacy_metadata(r),
-        duration: text(&r["lengthText"]),
+        duration: if r.pointer("/navigationEndpoint/reelWatchEndpoint").is_some() {
+            "SHORT".into()
+        } else {
+            text(&r["lengthText"])
+        },
         thumbnail: thumbnail(&r["thumbnail"]["thumbnails"]),
         channel_id: renderer_channel(r),
         avatar: avatar(
@@ -2328,6 +2335,7 @@ mod tests {
         assert_eq!(page.videos.len(), 2);
         assert_eq!(page.videos[0].title, "A short video");
         assert_eq!(page.videos[1].title, "A classic short");
+        assert!(page.videos.iter().all(|v| v.duration == "SHORT"));
         assert_eq!(page.videos[0].watch_hint, WATCHED);
     }
 

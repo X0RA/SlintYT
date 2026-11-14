@@ -24,7 +24,21 @@ export component AppWindow inherits Window {
     VerticalLayout {
         padding: 24px; spacing: 16px;
         HorizontalLayout {
-            Button { text: "History"; clicked => { AppState.view-kind = 1; AppState.page-title = "Watch history"; } }
+            Button { text: "History"; clicked => { AppState.view-kind = 1; AppState.page-title = "Watch history";
+                AppState.error = ""; AppState.busy = false;
+                AppState.videos = [
+                    {id:"new",title:"Most recently watched today",group:"Today",duration:"20:10"},
+                    {id:"older",title:"Earlier today — a long video title that wraps over multiple lines",group:"Today",duration:"14:05"},
+                    {id:"short",title:"Today's hidden Short",group:"Today",duration:"SHORT"},
+                    {id:"yesterday",title:"Yesterday's video",group:"Yesterday",duration:"30:00"},
+                    {id:"short-only",title:"A day with only Shorts",group:"Monday",duration:"SHORT"}
+                ];
+                AppState.sections = [
+                    {start:0,count:2,label:"Today",detail:"2 videos",header-index:0},
+                    {start:2,count:1,label:"Today · Shorts",detail:"1 Shorts",header-index:1,shorts:true,collapsed:true},
+                    {start:3,count:1,label:"Yesterday",detail:"1 video",header-index:2},
+                    {start:4,count:1,label:"Monday · Shorts",detail:"1 Shorts",header-index:3,shorts:true,collapsed:true}
+                ]; } }
             Button { text: "Search"; clicked => { AppState.view-kind = 2; AppState.page-title = "Results for a long search query that should elide"; AppState.page-subtitle = "Videos and playlists from YouTube"; } }
             Button { text: "Playlists"; clicked => { AppState.view-kind = 3; AppState.page-title = "Your playlists"; AppState.videos = [{ id: "PL_mock", title: "A playlist", channel: "Example", metadata: "3 videos", playlist: true }]; } }
             Button { text: "Playlist"; clicked => { AppState.view-kind = 4; AppState.page-title = "A playlist"; AppState.videos = [{ id: "abcdefghijk", title: "Building a desktop app with Rust and Slint", channel: "Example channel", metadata: "12K views · 2 days ago", duration: "24:10", thumbnail: @image-url("mock-thumbnail.svg"), watched: 1, watch-progress: 35 }, { id: "lmnopqrstuv", title: "A very long title that should wrap cleanly without hiding the channel or duration", channel: "Workshop", metadata: "3K views · 1 week ago", duration: "1:12:36", thumbnail: @image-url("mock-thumbnail.svg"), watched: 2, watch-progress: -1 }]; } }

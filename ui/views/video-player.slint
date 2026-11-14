@@ -106,7 +106,13 @@ export component VideoPlayer inherits Rectangle {
     forward-focus: keys;
     private property <bool> sync-menu-visible: AppState.sync-menu-open;
     changed sync-menu-visible => { if !root.sync-menu-visible { keys.focus(); } }
-    init => { keys.focus(); }
+    init => {
+        keys.focus();
+        // `changed` handlers do not publish their initial values. Seed the
+        // render size on every open, even when the window is already settled.
+        AppState.player-width = picture.width / 1px;
+        AppState.player-height = picture.height / 1px;
+    }
     keys := FocusScope {
         // More comments load as the page nears its end, the same way the feeds do.
         Timer {

@@ -1479,9 +1479,14 @@ fn register_renderer(app: &AppWindow, engine: Arc<Mpv>, ready: Arc<AtomicBool>) 
                     return;
                 }
                 let scale = app.window().scale_factor();
-                let width = (state.get_player_width() * scale).max(1.) as u32;
-                let height = (state.get_player_height() * scale).max(1.) as u32;
-                match renderer.render(width, height) {
+                let width = state.get_player_width() * scale;
+                let height = state.get_player_height() * scale;
+                // Layout can still be settling. Do not publish a 1px texture
+                // stretched across the player while its size is unavailable.
+                if !width.is_finite() || !height.is_finite() || width < 1. || height < 1. {
+                    return;
+                }
+                match renderer.render(width as u32, height as u32) {
                     Ok(Some(image)) => state.set_player_texture(image),
                     Ok(None) => {}
                     Err(_) => fail(&app, "Could not render the video. Please retry."),

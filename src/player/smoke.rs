@@ -292,9 +292,12 @@ fn native_video_playback_controls_resize_and_close() {
     engine.set_property("ao", "null").unwrap();
     let state = app.global::<AppState>();
     state.set_initializing(false);
-    state.set_player_open(true);
+    // Open only after the window has settled. Opening before app.run() can
+    // hide missing initial size publication behind the first window resize.
+    state.set_player_open(false);
     state.set_player_loading(true);
     state.set_player_title("Local GPU playback check".into());
+    FRAMES.lock().unwrap().clear();
     let stage = Rc::new(Cell::new(0));
     let next_calls = Rc::new(Cell::new(0));
     let next_count = next_calls.clone();
@@ -340,7 +343,9 @@ fn native_video_playback_controls_resize_and_close() {
                 resume_checked.set(true);
             }
             match stage.get() {
-                0 if player.ready.load(Ordering::Acquire) => {
+                0 if player.ready.load(Ordering::Acquire)
+                    && started.elapsed() > Duration::from_millis(500) => {
+                    state.set_player_open(true);
                     if let Some(id) = &public_video {
                         state.invoke_play_video(
                             id.as_str().into(),
@@ -372,6 +377,24 @@ fn native_video_playback_controls_resize_and_close() {
                     && (!captions_check || !state.get_player_subtitles_loading()) =>
                 {
                     assert!(commands::AUDIO_CHANNELS.load(Ordering::Acquire) > 0);
+                    // Check the actual rendered texture before any test-driven
+                    // resize. Derive the expectation from the window, not the
+                    // same globals that can incorrectly remain zero at startup.
+                    // This fixture has no docked chat: the picture fills the window.
+                    let window = app.window().size();
+                    let texture = state.get_player_texture().size();
+                    assert!(window.width > 1 && window.height > 1);
+                    assert!(
+                        texture.width.abs_diff(window.width) <= 1
+                            && texture.height.abs_diff(window.height) <= 1,
+                        "startup texture {texture:?} does not match window {window:?} before resizing"
+                    );
+                    assert!(FRAMES.lock().unwrap().iter().any(|(width, height, rgba)| {
+                        width.abs_diff(window.width) <= 1
+                            && height.abs_diff(window.height) <= 1
+                            && if online { rgba[..3].iter().any(|value| *value > 30) }
+                                else { rgba[0] > 180 && rgba[1] < 60 && rgba[2] < 60 }
+                    }), "no video frame at the initial window size before resizing");
                     if !online {
                         assert_eq!(state.get_player_current_quality(), "180p · MPEG-4");
                         assert_eq!(engine.get_property::<f64>("speed").unwrap(), 1.5);

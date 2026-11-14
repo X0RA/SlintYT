@@ -22,6 +22,8 @@ export component AppWindow inherits Window {
         AppState.player-quality-details = ["Preferred quality and codec", "av01.0.12M.08 + opus · webm · https · 401 · SDR", "vp09.00.41.08 + opus · webm · https · 303 · SDR", "avc1.64001F + mp4a.40.2 · mp4 · https · 22 · unavailable"];
     }
     VerticalLayout {
+        // Must be non-zero on first display, without pressing Compact/resizing.
+        Text { text: "Initial video surface: " + round(AppState.player-width) + " × " + round(AppState.player-height); color: white; }
         HorizontalLayout {
             Button { text: "Twitch chat"; clicked => {
                 AppState.player-twitch = true; AppState.chat-open = true; AppState.chat-follow = true;
